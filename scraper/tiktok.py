@@ -1,14 +1,81 @@
-"""TikTok profile scraper using Camoufox + WARP proxy."""
+"""TikTok profile scraper using curl_cffi + WARP proxy."""
 
 import json
 import re
 import sys
 import time
 from datetime import datetime
+from typing import Optional
+
+from curl_cffi import requests
 
 from scraper.db import add_profile, update_profile, add_posts, get_profile, log_scrape
 from scraper.proxy import get_proxy_config, is_wireproxy_running
 from scraper.utils import random_delay, save_cookies, load_cookies
+
+
+def _get_session() -> requests.Session:
+    """Create a curl_cffi session with browser impersonation."""
+    session = requests.Session(impersonate='chrome')
+    if is_wireproxy_running():
+        session.proxies = {
+            'http': 'socks5://127.0.0.1:1080',
+            'https': 'socks5://127.0.0.1:1080',
+        }
+    return session
+
+
+def _fetch_profile_page(session: requests.Session, username: str) -> Optional[dict]:
+    """Fetch TikTok profile page and extract __UNIVERSAL_DATA_FOR_REHYDRATION__."""
+    url = f'https://www.tiktok.com/@{username}'
+    resp = session.get(url, timeout=30)
+    
+    if resp.status_code != 200:
+        print(f"  [!] HTTP {resp.status_code} for {url}")
+        return None
+    
+    html = resp.text
+    
+    # Extract __UNIVERSAL_DATA_FOR_REHYDRATION__
+    match = re.search(
+        r'<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>(.*?)</script>',
+        html, re.DOTALL
+    )
+    if match:
+        try:
+            return json.loads(match.group(1))
+        except json.JSONDecodeError:
+            print("  [!] Failed to parse UNIVERSAL_DATA JSON")
+    
+    # Fallback: try SIGI_STATE
+    match = re.search(r'<script id="SIGI_STATE"[^>]*>(.*?)</script>', html, re.DOTALL)
+    if match:
+        try:
+            return {'__SIGI__': json.loads(match.group(1))}
+        except json.JSONDecodeError:
+            pass
+    
+    print("  [!] No data found in page")
+    return None
+
+
+def _fetch_video_list(session: requests.Session, sec_uid: str, count: int = 30) -> list[dict]:
+    """Fetch video list via TikTok API."""
+    url = 'https://www.tiktok.com/api/post/item_list/'
+    params = {
+        'aid': '1988',
+        'count': str(count),
+        'secUid': sec_uid,
+        'cursor': '0',
+    }
+    try:
+        resp = session.get(url, params=params, timeout=15)
+        if resp.status_code == 200:
+            data = resp.json()
+            return data.get('itemList', [])
+    except Exception as e:
+        print(f"  [!] Video list API failed: {e}")
+    return []
 
 
 def scrape_profile(username: str) -> dict:
@@ -19,107 +86,26 @@ def scrape_profile(username: str) -> dict:
     
     print(f"[*] Scraping TikTok @{username}...")
     
-    # Check proxy
-    if not is_wireproxy_running():
-        print("[!] Warning: wireproxy not running, scraping without proxy")
+    session = _get_session()
+    page_data = _fetch_profile_page(session, username)
     
-    proxy_config = get_proxy_config()
-    api_data = {}
-    video_list_data = []
+    if not page_data:
+        duration_ms = int((time.time() - start_time) * 1000)
+        log_scrape(profile_id, 'error', error_message='No data found', duration_ms=duration_ms)
+        return {'username': username, 'videos': [], 'profile_id': profile_id}
     
-    try:
-        from camoufox.sync_api import Camoufox
-    except ImportError:
-        from camoufox import Camoufox
+    # Parse profile data
+    profile_data = _parse_profile_data(page_data, username)
     
-    def handle_response(response):
-        nonlocal api_data, video_list_data
-        url = response.url
-        try:
-            if '/api/user/detail' in url or 'userInfo' in url:
-                data = response.json()
-                if data:
-                    api_data['user_detail'] = data
-                    print(f"  [+] Captured user detail API")
-            elif '/api/post/item_list' in url or 'itemList' in url:
-                data = response.json()
-                if data:
-                    video_list_data.append(data)
-                    print(f"  [+] Captured video list API")
-        except Exception:
-            pass
+    # Parse videos from page data
+    videos = _parse_video_data(page_data, username, profile_data.get('avg_views', 1))
     
-    with Camoufox(
-        headless=True,
-        proxy=proxy_config if is_wireproxy_running() else None,
-        geoip=True,
-    ) as browser:
-        page = browser.new_page()
-        
-        # Load cookies if available
-        cookies = load_cookies(f'tiktok_{username}')
-        if cookies:
-            try:
-                page.context.add_cookies(cookies)
-            except Exception:
-                pass
-        
-        # Listen for API responses
-        page.on('response', handle_response)
-        
-        # Navigate to profile
-        url = f'https://www.tiktok.com/@{username}'
-        print(f"  [*] Navigating to {url}")
-        page.goto(url, wait_until='domcontentloaded', timeout=30000)
-        random_delay(3, 6)
-        
-        # Scroll to trigger video list loading
-        page.evaluate("window.scrollBy(0, 800)")
-        random_delay(2, 4)
-        page.evaluate("window.scrollBy(0, 800)")
-        random_delay(2, 3)
-        
-        # Save cookies
-        try:
-            save_cookies(page.context.cookies(), f'tiktok_{username}')
-        except Exception:
-            pass
-        
-        # FALLBACK: Parse __UNIVERSAL_DATA_FOR_REHYDRATION__ if API interception didn't work
-        if not api_data.get('user_detail'):
-            print("  [*] Trying fallback: __UNIVERSAL_DATA_FOR_REHYDRATION__")
-            try:
-                script_content = page.evaluate("""
-                    () => {
-                        const el = document.getElementById('__UNIVERSAL_DATA_FOR_REHYDRATION__');
-                        return el ? el.textContent : null;
-                    }
-                """)
-                if script_content:
-                    universal_data = json.loads(script_content)
-                    api_data['universal'] = universal_data
-                    print("  [+] Got universal data")
-            except Exception as e:
-                print(f"  [!] Fallback failed: {e}")
-        
-        # Also try SIGI_STATE
-        if not api_data.get('user_detail') and not api_data.get('universal'):
-            try:
-                sigi = page.evaluate("""
-                    () => {
-                        const el = document.getElementById('SIGI_STATE');
-                        return el ? el.textContent : null;
-                    }
-                """)
-                if sigi:
-                    api_data['sigi'] = json.loads(sigi)
-                    print("  [+] Got SIGI_STATE data")
-            except Exception:
-                pass
-    
-    # Parse the collected data
-    profile_data = _parse_profile_data(api_data, username)
-    videos = _parse_video_data(api_data, video_list_data, profile_data.get('avg_views', 1))
+    # Try API for more videos if we got a secUid
+    if profile_data.get('sec_uid') and len(videos) < 10:
+        api_videos = _fetch_video_list(session, profile_data['sec_uid'])
+        if api_videos:
+            avg_views = profile_data.get('avg_views', 1)
+            videos = _parse_raw_items(api_videos, avg_views)
     
     duration_ms = int((time.time() - start_time) * 1000)
     
@@ -141,127 +127,109 @@ def scrape_profile(username: str) -> dict:
     
     log_scrape(profile_id, 'success', len(videos), duration_ms=duration_ms)
     
-    print(f"  [✓] Scraped @{username}: {profile_data.get('followers', 0)} followers, {len(videos)} videos ({duration_ms}ms)")
+    print(f"  [✓] @{username}: {profile_data.get('followers', 0):,} followers, "
+          f"{len(videos)} videos ({duration_ms}ms)")
     
     return {**profile_data, 'videos': videos, 'profile_id': profile_id}
 
 
-def _parse_profile_data(api_data: dict, username: str) -> dict:
-    """Extract profile metadata from various data sources."""
+def _parse_profile_data(page_data: dict, username: str) -> dict:
+    """Extract profile metadata."""
     result = {
-        'username': username,
-        'display_name': '',
-        'bio': '',
-        'avatar_url': '',
-        'followers': 0,
-        'following': 0,
-        'total_likes': 0,
-        'post_count': 0,
-        'avg_views': 0,
+        'username': username, 'display_name': '', 'bio': '', 'avatar_url': '',
+        'followers': 0, 'following': 0, 'total_likes': 0, 'post_count': 0,
+        'avg_views': 0, 'sec_uid': '',
     }
     
-    user_info = None
+    # UNIVERSAL_DATA path
+    scope = page_data.get('__DEFAULT_SCOPE__', {})
+    user_detail = scope.get('webapp.user-detail', {})
+    user_info = user_detail.get('userInfo', {})
     
-    # Try API response
-    if 'user_detail' in api_data:
-        d = api_data['user_detail']
-        user_info = d.get('userInfo', d.get('user', {}))
-        if 'userInfo' in d:
-            user = d['userInfo'].get('user', {})
-            stats = d['userInfo'].get('stats', {})
-            result['display_name'] = user.get('nickname', '')
-            result['bio'] = user.get('signature', '')
-            result['avatar_url'] = user.get('avatarLarger', user.get('avatarMedium', ''))
-            result['followers'] = stats.get('followerCount', 0)
-            result['following'] = stats.get('followingCount', 0)
-            result['total_likes'] = stats.get('heartCount', stats.get('heart', 0))
-            result['post_count'] = stats.get('videoCount', 0)
-            return result
+    if user_info:
+        user = user_info.get('user', {})
+        stats = user_info.get('stats', {})
+        result['display_name'] = user.get('nickname', '')
+        result['bio'] = user.get('signature', '')
+        result['avatar_url'] = user.get('avatarLarger', user.get('avatarMedium', ''))
+        result['followers'] = stats.get('followerCount', 0)
+        result['following'] = stats.get('followingCount', 0)
+        result['total_likes'] = stats.get('heartCount', stats.get('heart', 0))
+        result['post_count'] = stats.get('videoCount', 0)
+        result['sec_uid'] = user.get('secUid', '')
+        
+        # Estimate avg views
+        if result['post_count'] > 0 and result['total_likes'] > 0:
+            # Rough estimate: avg_views ≈ total_likes / post_count * 5 (typical like-to-view ratio)
+            result['avg_views'] = (result['total_likes'] / result['post_count']) * 5
+        return result
     
-    # Try universal data
-    if 'universal' in api_data:
-        try:
-            default_scope = api_data['universal'].get('__DEFAULT_SCOPE__', {})
-            user_detail = default_scope.get('webapp.user-detail', {})
-            user_info_data = user_detail.get('userInfo', {})
-            user = user_info_data.get('user', {})
-            stats = user_info_data.get('stats', {})
-            result['display_name'] = user.get('nickname', '')
-            result['bio'] = user.get('signature', '')
-            result['avatar_url'] = user.get('avatarLarger', '')
-            result['followers'] = stats.get('followerCount', 0)
-            result['following'] = stats.get('followingCount', 0)
-            result['total_likes'] = stats.get('heartCount', stats.get('heart', 0))
-            result['post_count'] = stats.get('videoCount', 0)
-        except Exception:
-            pass
-    
-    # Try SIGI_STATE
-    if 'sigi' in api_data:
-        try:
-            sigi = api_data['sigi']
-            user_module = sigi.get('UserModule', {})
-            users = user_module.get('users', {})
-            user = users.get(username, {})
-            stats_mod = sigi.get('UserModule', {}).get('stats', {})
-            user_stats = stats_mod.get(username, {})
-            result['display_name'] = user.get('nickname', '')
-            result['bio'] = user.get('signature', '')
-            result['avatar_url'] = user.get('avatarLarger', '')
-            result['followers'] = user_stats.get('followerCount', 0)
-            result['following'] = user_stats.get('followingCount', 0)
-            result['total_likes'] = user_stats.get('heartCount', 0)
-            result['post_count'] = user_stats.get('videoCount', 0)
-        except Exception:
-            pass
+    # SIGI_STATE path
+    sigi = page_data.get('__SIGI__', {})
+    if sigi:
+        users = sigi.get('UserModule', {}).get('users', {})
+        user = users.get(username, {})
+        stats = sigi.get('UserModule', {}).get('stats', {}).get(username, {})
+        result['display_name'] = user.get('nickname', '')
+        result['bio'] = user.get('signature', '')
+        result['avatar_url'] = user.get('avatarLarger', '')
+        result['followers'] = stats.get('followerCount', 0)
+        result['following'] = stats.get('followingCount', 0)
+        result['total_likes'] = stats.get('heartCount', 0)
+        result['post_count'] = stats.get('videoCount', 0)
+        result['sec_uid'] = user.get('secUid', '')
     
     return result
 
 
-def _parse_video_data(api_data: dict, video_list_data: list, avg_views: float) -> list[dict]:
-    """Extract video list from various data sources."""
-    videos = []
+def _parse_video_data(page_data: dict, username: str, avg_views: float) -> list[dict]:
+    """Extract videos from page data."""
     raw_items = []
     
-    # From API interception
-    for data in video_list_data:
-        items = data.get('itemList', data.get('items', []))
-        raw_items.extend(items)
+    # UNIVERSAL_DATA: look for item list in various locations
+    scope = page_data.get('__DEFAULT_SCOPE__', {})
     
-    # From universal data
-    if not raw_items and 'universal' in api_data:
-        try:
-            default_scope = api_data['universal'].get('__DEFAULT_SCOPE__', {})
-            item_module = default_scope.get('webapp.user-detail', {})
-            # Sometimes items are in a different location
-            post_data = default_scope.get('webapp.post-detail', {})
-            user_post = default_scope.get('webapp.user-detail', {})
-            # Try to find item list in various places
-            for key, val in default_scope.items():
-                if isinstance(val, dict):
-                    for k2, v2 in val.items():
-                        if isinstance(v2, list) and len(v2) > 0 and isinstance(v2[0], dict) and 'id' in v2[0]:
-                            raw_items = v2
-                            break
-        except Exception:
-            pass
+    # Check webapp.user-detail for post items
+    user_detail = scope.get('webapp.user-detail', {})
     
-    # From SIGI_STATE
-    if not raw_items and 'sigi' in api_data:
-        try:
-            item_module = api_data['sigi'].get('ItemModule', {})
-            raw_items = list(item_module.values())
-        except Exception:
-            pass
+    # The video items might be in a different key
+    for key, val in scope.items():
+        if isinstance(val, dict):
+            for k2, v2 in val.items():
+                if isinstance(v2, list) and v2 and isinstance(v2[0], dict) and ('id' in v2[0] or 'video' in v2[0]):
+                    raw_items = v2
+                    break
+            if raw_items:
+                break
     
-    # Calculate avg_views from the items if we have them
-    if raw_items:
-        total_views = sum(
-            item.get('stats', {}).get('playCount', item.get('playCount', 0))
-            for item in raw_items
-        )
-        if len(raw_items) > 0:
-            avg_views = max(total_views / len(raw_items), 1)
+    # SIGI_STATE path
+    if not raw_items:
+        sigi = page_data.get('__SIGI__', {})
+        items = sigi.get('ItemModule', {})
+        if items:
+            raw_items = list(items.values())
+    
+    return _parse_raw_items(raw_items, avg_views)
+
+
+def _parse_raw_items(raw_items: list[dict], avg_views: float) -> list[dict]:
+    """Parse raw TikTok video items into our format."""
+    videos = []
+    
+    if not raw_items:
+        return videos
+    
+    # Recalculate avg_views from actual data
+    view_counts = [
+        item.get('stats', {}).get('playCount', item.get('playCount', 0))
+        for item in raw_items
+    ]
+    if view_counts:
+        actual_avg = sum(view_counts) / len(view_counts)
+        if actual_avg > 0:
+            avg_views = actual_avg
+    
+    avg_views = max(avg_views, 1)
     
     for item in raw_items:
         stats = item.get('stats', {})
@@ -303,7 +271,10 @@ if __name__ == '__main__':
     result = scrape_profile(username)
     print(f"\nProfile: @{result['username']}")
     print(f"  Display name: {result.get('display_name', 'N/A')}")
-    print(f"  Followers: {result.get('followers', 0)}")
+    print(f"  Followers: {result.get('followers', 0):,}")
+    print(f"  Following: {result.get('following', 0):,}")
+    print(f"  Total likes: {result.get('total_likes', 0):,}")
     print(f"  Videos scraped: {len(result.get('videos', []))}")
     for v in result.get('videos', [])[:5]:
-        print(f"  - {v['description'][:50]}... | views: {v['views']} | viral: {v['viral_score']}x")
+        desc = v['description'][:50] if v['description'] else '(no desc)'
+        print(f"    - {desc} | views: {v['views']:,} | viral: {v['viral_score']}x")

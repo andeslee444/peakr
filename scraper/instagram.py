@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
-"""Instagram public profile scraper using Camoufox + WARP proxy."""
+"""Instagram profile scraper using Camoufox + WARP proxy.
+
+Requires IG session cookies. First run with --login to authenticate,
+or place session cookies in data/cookies/instagram.json.
+"""
 
 import json
+import os
 import re
 import sys
 import time
@@ -9,6 +14,7 @@ import random
 import logging
 from datetime import datetime
 from pathlib import Path
+from typing import Optional, List, Dict
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("ig-scraper")
@@ -16,75 +22,121 @@ log = logging.getLogger("ig-scraper")
 PROXY = {"server": "socks5://127.0.0.1:1080"}
 COOKIE_DIR = Path(__file__).parent.parent / "data" / "cookies"
 COOKIE_DIR.mkdir(parents=True, exist_ok=True)
+COOKIE_FILE = COOKIE_DIR / "instagram.json"
+
+IG_APP_ID = "936619743392459"
 
 
-def scrape_profile(username: str, headless: bool = True) -> dict:
-    """Scrape an Instagram public profile. Returns dict with profile + posts or None on failure."""
+def _get_browser_and_context(headless=True):
+    from camoufox.sync_api import Camoufox
+    browser = Camoufox(headless=headless, humanize=True, proxy=PROXY, geoip=True)
+    cm = browser.__enter__()
+    ctx = cm.new_context()
+    # Load saved cookies
+    if COOKIE_FILE.exists():
+        try:
+            cookies = json.loads(COOKIE_FILE.read_text())
+            if cookies:
+                ctx.add_cookies(cookies)
+                log.info("Loaded saved session cookies")
+        except Exception as e:
+            log.warning(f"Failed to load cookies: {e}")
+    return cm, ctx
+
+
+def _save_cookies(ctx):
+    try:
+        cookies = ctx.cookies()
+        COOKIE_FILE.write_text(json.dumps(cookies, indent=2))
+        log.info("Saved session cookies")
+    except Exception as e:
+        log.warning(f"Failed to save cookies: {e}")
+
+
+def login_interactive():
+    """Interactive login — opens visible browser for user to log in manually."""
+    from camoufox.sync_api import Camoufox
+
+    print("\n🔐 Opening Instagram login page...")
+    print("   Log in manually, then press Enter here when done.\n")
+
+    with Camoufox(headless=False, humanize=True, proxy=PROXY, geoip=True) as browser:
+        ctx = browser.new_context()
+        page = ctx.new_page()
+        page.goto("https://www.instagram.com/accounts/login/", wait_until="domcontentloaded", timeout=30000)
+
+        input("Press Enter after you've logged in successfully...")
+
+        _save_cookies(ctx)
+        # Verify session
+        page2 = ctx.new_page()
+        resp_data = page2.evaluate("""async () => {
+            const r = await fetch('https://i.instagram.com/api/v1/users/web_profile_info/?username=instagram', {
+                headers: {'X-IG-App-ID': '936619743392459', 'X-Requested-With': 'XMLHttpRequest'},
+                credentials: 'include'
+            });
+            return {status: r.status, ok: r.ok};
+        }""")
+        if resp_data.get("ok"):
+            print("✅ Login successful! Session cookies saved.")
+        else:
+            print(f"⚠️  Login may have failed (API status: {resp_data.get('status')})")
+            print("   Try again or check your credentials.")
+
+
+def _has_valid_session(ctx) -> bool:
+    """Check if current cookies give us a valid session."""
+    page = ctx.new_page()
+    try:
+        page.goto("https://www.instagram.com/", wait_until="domcontentloaded", timeout=15000)
+        time.sleep(2)
+        url = page.url
+        page.close()
+        return "login" not in url
+    except Exception:
+        try:
+            page.close()
+        except:
+            pass
+        return False
+
+
+def scrape_profile(username: str, headless: bool = True) -> Optional[Dict]:
+    """Scrape an Instagram public profile. Returns dict with profile + posts or None."""
     from camoufox.sync_api import Camoufox
 
     username = username.lstrip("@")
-    url = f"https://www.instagram.com/{username}/"
     log.info(f"Scraping Instagram profile: {username}")
-
-    captured_data = {"profile": None, "media_nodes": []}
-
-    def handle_response(response):
-        """Intercept GraphQL API responses."""
-        try:
-            resp_url = response.url
-            if "/graphql/query" in resp_url or "/api/v1/users/" in resp_url:
-                ct = response.headers.get("content-type", "")
-                if "json" in ct:
-                    body = response.json()
-                    _extract_from_graphql(body, captured_data)
-        except Exception:
-            pass
-
     start = time.time()
 
     try:
         with Camoufox(headless=headless, humanize=True, proxy=PROXY, geoip=True) as browser:
-            context = browser.new_context()
+            ctx = browser.new_context()
 
-            # Load cookies if available
-            cookie_file = COOKIE_DIR / "instagram.json"
-            if cookie_file.exists():
+            # Load cookies
+            if COOKIE_FILE.exists():
                 try:
-                    cookies = json.loads(cookie_file.read_text())
-                    context.add_cookies(cookies)
-                    log.info("Loaded saved cookies")
+                    cookies = json.loads(COOKIE_FILE.read_text())
+                    if cookies:
+                        ctx.add_cookies(cookies)
                 except Exception:
                     pass
 
-            page = context.new_page()
-            page.on("response", handle_response)
+            page = ctx.new_page()
 
-            # Navigate
-            page.goto(url, wait_until="domcontentloaded", timeout=30000)
-            time.sleep(random.uniform(3, 5))
+            # Check session validity
+            if not _has_valid_session(ctx):
+                log.error("No valid Instagram session. Run with --login first.")
+                return None
 
-            # Scroll to trigger more data loading
-            page.mouse.wheel(0, 800)
-            time.sleep(random.uniform(2, 4))
-            page.mouse.wheel(0, 600)
-            time.sleep(random.uniform(1, 3))
+            # Use the web_profile_info API
+            profile_data = _fetch_profile_api(ctx, username)
+            if not profile_data:
+                # Fallback: navigate to profile page and intercept
+                profile_data = _scrape_profile_page(ctx, username)
 
-            # If GraphQL interception didn't work, try page source fallback
-            if not captured_data["profile"]:
-                log.info("GraphQL interception didn't capture profile, trying page source fallback")
-                _fallback_page_source(page, captured_data, username)
-
-            # If still no data, try meta tags as last resort
-            if not captured_data["profile"]:
-                log.info("Trying meta tag extraction")
-                _fallback_meta_tags(page, captured_data, username)
-
-            # Save cookies for session persistence
-            try:
-                cookies = context.cookies()
-                cookie_file.write_text(json.dumps(cookies))
-            except Exception:
-                pass
+            # Save cookies
+            _save_cookies(ctx)
 
     except Exception as e:
         log.error(f"Browser error: {e}")
@@ -92,81 +144,157 @@ def scrape_profile(username: str, headless: bool = True) -> dict:
 
     elapsed_ms = int((time.time() - start) * 1000)
 
-    if not captured_data["profile"]:
+    if not profile_data:
         log.warning(f"Could not extract profile data for {username}")
         return None
 
-    profile = captured_data["profile"]
-    posts = captured_data.get("media_nodes", [])
+    profile = profile_data["profile"]
+    posts = profile_data.get("posts", [])
 
     # Calculate viral scores
     if posts:
-        avg_engagement = sum(p.get("likes", 0) + p.get("comments", 0) for p in posts) / len(posts)
-        if avg_engagement > 0:
-            for p in posts:
-                eng = p.get("likes", 0) + p.get("comments", 0)
-                p["viral_score"] = round(eng / avg_engagement, 2)
-        else:
-            for p in posts:
-                p["viral_score"] = 1.0
-
+        avg_eng = sum(p.get("likes", 0) + p.get("comments", 0) for p in posts) / len(posts)
+        for p in posts:
+            eng = p.get("likes", 0) + p.get("comments", 0)
+            p["viral_score"] = round(eng / avg_eng, 2) if avg_eng > 0 else 1.0
         avg_views = sum(p.get("views", 0) for p in posts) / len(posts)
         profile["avg_views"] = avg_views
     else:
         profile["avg_views"] = 0
 
-    profile["post_count"] = profile.get("post_count", len(posts))
-
     log.info(f"Scraped {username}: {profile.get('followers', 0)} followers, {len(posts)} posts ({elapsed_ms}ms)")
 
-    return {
-        "profile": profile,
-        "posts": posts,
-        "elapsed_ms": elapsed_ms,
+    return {"profile": profile, "posts": posts, "elapsed_ms": elapsed_ms}
+
+
+def _fetch_profile_api(ctx, username: str) -> Optional[Dict]:
+    """Fetch profile data via Instagram's internal API."""
+    page = ctx.new_page()
+    try:
+        page.goto("https://www.instagram.com/", wait_until="domcontentloaded", timeout=15000)
+        time.sleep(1)
+
+        result = page.evaluate("""async (username) => {
+            try {
+                const r = await fetch(
+                    `https://i.instagram.com/api/v1/users/web_profile_info/?username=${username}`,
+                    {
+                        headers: {
+                            'X-IG-App-ID': '936619743392459',
+                            'X-Requested-With': 'XMLHttpRequest',
+                        },
+                        credentials: 'include'
+                    }
+                );
+                if (!r.ok) return {error: r.status};
+                return await r.json();
+            } catch(e) {
+                return {error: e.message};
+            }
+        }""", username)
+
+        page.close()
+
+        if not result or "error" in result:
+            log.warning(f"API returned error: {result}")
+            return None
+
+        user = (result.get("data", {}).get("user") or
+                result.get("graphql", {}).get("user") or
+                result.get("user"))
+
+        if not user:
+            log.warning("No user in API response")
+            return None
+
+        return _parse_user_object(user)
+
+    except Exception as e:
+        log.warning(f"API fetch failed: {e}")
+        try:
+            page.close()
+        except:
+            pass
+        return None
+
+
+def _scrape_profile_page(ctx, username: str) -> Optional[Dict]:
+    """Fallback: Navigate to profile page and extract data."""
+    captured = {"profile": None, "posts": []}
+
+    def on_response(resp):
+        try:
+            url = resp.url
+            if "/graphql/query" in url or "web_profile_info" in url:
+                ct = resp.headers.get("content-type", "")
+                if "json" in ct:
+                    body = resp.json()
+                    user = None
+                    if "data" in body and "user" in (body.get("data") or {}):
+                        user = body["data"]["user"]
+                    elif "graphql" in body:
+                        user = body.get("graphql", {}).get("user")
+                    if user and not captured["profile"]:
+                        result = _parse_user_object(user)
+                        captured["profile"] = result["profile"]
+                        captured["posts"] = result.get("posts", [])
+        except Exception:
+            pass
+
+    page = ctx.new_page()
+    page.on("response", on_response)
+
+    try:
+        page.goto(f"https://www.instagram.com/{username}/", wait_until="domcontentloaded", timeout=30000)
+        time.sleep(random.uniform(3, 5))
+        page.mouse.wheel(0, 800)
+        time.sleep(random.uniform(2, 4))
+
+        if captured["profile"]:
+            page.close()
+            return {"profile": captured["profile"], "posts": captured["posts"]}
+
+        # Try extracting from page source
+        html = page.content()
+        _try_page_source(html, username, captured)
+
+        # Try meta tags
+        if not captured["profile"]:
+            _try_meta_tags(page, username, captured)
+
+        page.close()
+
+        if captured["profile"]:
+            return {"profile": captured["profile"], "posts": captured["posts"]}
+
+    except Exception as e:
+        log.warning(f"Profile page scrape failed: {e}")
+        try:
+            page.close()
+        except:
+            pass
+
+    return None
+
+
+def _parse_user_object(user: dict) -> Dict:
+    """Parse Instagram user object into our schema."""
+    profile = {
+        "display_name": user.get("full_name", ""),
+        "bio": user.get("biography", ""),
+        "avatar_url": user.get("profile_pic_url_hd") or user.get("profile_pic_url", ""),
+        "followers": _edge_count(user, "edge_followed_by") or user.get("follower_count", 0),
+        "following": _edge_count(user, "edge_follow") or user.get("following_count", 0),
+        "total_likes": 0,
+        "post_count": _edge_count(user, "edge_owner_to_timeline_media") or user.get("media_count", 0),
     }
 
+    posts = []
+    media = user.get("edge_owner_to_timeline_media") or user.get("edge_felix_video_timeline") or {}
+    edges = media.get("edges", [])
 
-def _extract_from_graphql(body: dict, captured: dict):
-    """Extract profile and media data from GraphQL response."""
-    # Try standard user query response
-    user = None
-
-    # Path: data.user
-    if "data" in body and "user" in (body.get("data") or {}):
-        user = body["data"]["user"]
-    # Path: graphql.user
-    elif "graphql" in body and "user" in (body.get("graphql") or {}):
-        user = body["graphql"]["user"]
-    # Path: data.xdt_api__v1__feed__user_timeline_graphql_connection (newer API)
-    elif "data" in body:
-        for key in (body.get("data") or {}):
-            val = body["data"][key]
-            if isinstance(val, dict) and "edges" in val:
-                _extract_media_edges(val.get("edges", []), captured)
-            if isinstance(val, dict) and "user" in val:
-                user = val["user"]
-
-    if user and not captured["profile"]:
-        captured["profile"] = {
-            "display_name": user.get("full_name", ""),
-            "bio": user.get("biography", ""),
-            "avatar_url": user.get("profile_pic_url_hd") or user.get("profile_pic_url", ""),
-            "followers": _edge_count(user, "edge_followed_by") or user.get("follower_count", 0),
-            "following": _edge_count(user, "edge_follow") or user.get("following_count", 0),
-            "total_likes": 0,
-            "post_count": _edge_count(user, "edge_owner_to_timeline_media") or user.get("media_count", 0),
-        }
-
-        # Extract media from user object
-        media = user.get("edge_owner_to_timeline_media") or user.get("edge_felix_video_timeline") or {}
-        if "edges" in media:
-            _extract_media_edges(media["edges"], captured)
-
-
-def _extract_media_edges(edges: list, captured: dict):
-    """Extract post data from GraphQL media edges."""
     for edge in edges:
-        node = edge.get("node", edge) if isinstance(edge, dict) else {}
+        node = edge.get("node", edge)
         if not node.get("id") and not node.get("shortcode"):
             continue
 
@@ -179,117 +307,110 @@ def _extract_media_edges(edges: list, captured: dict):
             "thumbnail_url": node.get("display_url") or node.get("thumbnail_src", ""),
             "description": _get_caption(node),
             "views": node.get("video_view_count", 0) if is_video else 0,
-            "likes": _edge_count(node, "edge_media_preview_like") or node.get("like_count", 0),
+            "likes": _edge_count(node, "edge_media_preview_like") or _edge_count(node, "edge_liked_by") or node.get("like_count", 0),
             "comments": _edge_count(node, "edge_media_to_comment") or node.get("comment_count", 0),
             "shares": 0,
             "is_video": 1 if is_video else 0,
             "duration_seconds": None,
             "posted_at": _ts_to_iso(node.get("taken_at_timestamp") or node.get("taken_at")),
         }
+        posts.append(post)
 
-        # Avoid duplicates
-        existing_ids = {p["platform_id"] for p in captured["media_nodes"]}
-        if shortcode not in existing_ids:
-            captured["media_nodes"].append(post)
+    return {"profile": profile, "posts": posts}
 
 
-def _fallback_page_source(page, captured: dict, username: str):
-    """Parse embedded JSON from page source."""
-    try:
-        html = page.content()
-
-        # Try window._sharedData
-        m = re.search(r'window\._sharedData\s*=\s*({.+?});</script>', html)
+def _try_page_source(html: str, username: str, captured: dict):
+    """Try to extract data from embedded JSON in page source."""
+    patterns = [
+        r'window\._sharedData\s*=\s*({.+?});</script>',
+        r'window\.__additionalDataLoaded\s*\([^,]+,\s*({.+?})\)\s*;',
+    ]
+    for pat in patterns:
+        m = re.search(pat, html)
         if m:
-            data = json.loads(m.group(1))
-            user = (data.get("entry_data", {})
-                    .get("ProfilePage", [{}])[0]
-                    .get("graphql", {})
-                    .get("user", {}))
-            if user:
-                _extract_from_graphql({"graphql": {"user": user}}, captured)
-                return
-
-        # Try __additionalData
-        m = re.search(r'window\.__additionalDataLoaded\s*\([^,]+,\s*({.+?})\)\s*;', html)
-        if m:
-            data = json.loads(m.group(1))
-            if "graphql" in data:
-                _extract_from_graphql(data, captured)
-                return
-
-        # Try JSON embedded in script type="application/json"
-        for m in re.finditer(r'<script[^>]*type="application/json"[^>]*>(.+?)</script>', html):
             try:
                 data = json.loads(m.group(1))
-                _try_deep_extract(data, captured, username)
-                if captured["profile"]:
+                user = _find_user_in_data(data, username)
+                if user:
+                    result = _parse_user_object(user)
+                    captured["profile"] = result["profile"]
+                    captured["posts"] = result.get("posts", [])
                     return
             except json.JSONDecodeError:
                 continue
 
-    except Exception as e:
-        log.warning(f"Page source fallback failed: {e}")
+    # Try script type="application/json"
+    for m in re.finditer(r'<script[^>]*type="application/json"[^>]*>(.+?)</script>', html):
+        try:
+            data = json.loads(m.group(1))
+            user = _find_user_in_data(data, username)
+            if user:
+                result = _parse_user_object(user)
+                captured["profile"] = result["profile"]
+                captured["posts"] = result.get("posts", [])
+                return
+        except (json.JSONDecodeError, Exception):
+            continue
 
 
-def _try_deep_extract(data, captured: dict, username: str, depth: int = 0):
-    """Recursively search JSON for user data."""
-    if depth > 8 or captured["profile"]:
-        return
+def _find_user_in_data(data, username: str, depth: int = 0):
+    """Recursively find user object in nested data."""
+    if depth > 8:
+        return None
     if isinstance(data, dict):
-        # Check if this looks like a user object
         if data.get("username") == username and ("edge_followed_by" in data or "follower_count" in data):
-            _extract_from_graphql({"graphql": {"user": data}}, captured)
-            return
+            return data
         if "user" in data and isinstance(data["user"], dict):
             u = data["user"]
             if u.get("username") == username:
-                _extract_from_graphql({"graphql": {"user": u}}, captured)
-                return
+                return u
         for v in data.values():
-            _try_deep_extract(v, captured, username, depth + 1)
+            r = _find_user_in_data(v, username, depth + 1)
+            if r:
+                return r
     elif isinstance(data, list):
         for item in data[:20]:
-            _try_deep_extract(item, captured, username, depth + 1)
+            r = _find_user_in_data(item, username, depth + 1)
+            if r:
+                return r
+    return None
 
 
-def _fallback_meta_tags(page, captured: dict, username: str):
-    """Last resort: extract basic info from meta tags."""
+def _try_meta_tags(page, username: str, captured: dict):
+    """Extract basic info from meta tags."""
     try:
-        desc = page.query_selector('meta[name="description"]')
-        if not desc:
-            desc = page.query_selector('meta[property="og:description"]')
-        if desc:
-            content = desc.get_attribute("content") or ""
-            # Pattern: "123K Followers, 456 Following, 789 Posts - See Instagram photos..."
-            followers = _parse_meta_count(content, r'([\d,.]+[KMB]?)\s*Followers')
-            following = _parse_meta_count(content, r'([\d,.]+[KMB]?)\s*Following')
-            posts = _parse_meta_count(content, r'([\d,.]+[KMB]?)\s*Posts')
+        for sel in ['meta[name="description"]', 'meta[property="og:description"]']:
+            desc = page.query_selector(sel)
+            if desc:
+                content = desc.get_attribute("content") or ""
+                followers = _parse_meta_count(content, r'([\d,.]+[KMB]?)\s*Followers')
+                if followers is not None:
+                    following = _parse_meta_count(content, r'([\d,.]+[KMB]?)\s*Following')
+                    post_count = _parse_meta_count(content, r'([\d,.]+[KMB]?)\s*Posts')
 
-            if followers is not None:
-                og_image = page.query_selector('meta[property="og:image"]')
-                avatar = og_image.get_attribute("content") if og_image else ""
+                    og_image = page.query_selector('meta[property="og:image"]')
+                    avatar = og_image.get_attribute("content") if og_image else ""
 
-                title_el = page.query_selector('meta[property="og:title"]')
-                display_name = ""
-                if title_el:
-                    t = title_el.get_attribute("content") or ""
-                    # "Display Name (@username)"
-                    m = re.match(r'^(.+?)\s*\(', t)
-                    if m:
-                        display_name = m.group(1).strip()
+                    title_el = page.query_selector('meta[property="og:title"]')
+                    display_name = ""
+                    if title_el:
+                        t = title_el.get_attribute("content") or ""
+                        m = re.match(r'^(.+?)\s*\(', t)
+                        if m:
+                            display_name = m.group(1).strip()
 
-                captured["profile"] = {
-                    "display_name": display_name,
-                    "bio": "",
-                    "avatar_url": avatar,
-                    "followers": followers,
-                    "following": following or 0,
-                    "total_likes": 0,
-                    "post_count": posts or 0,
-                }
+                    captured["profile"] = {
+                        "display_name": display_name,
+                        "bio": "",
+                        "avatar_url": avatar,
+                        "followers": followers,
+                        "following": following or 0,
+                        "total_likes": 0,
+                        "post_count": post_count or 0,
+                    }
+                    return
     except Exception as e:
-        log.warning(f"Meta tag fallback failed: {e}")
+        log.warning(f"Meta tag extraction failed: {e}")
 
 
 def _edge_count(obj: dict, key: str) -> int:
@@ -305,10 +426,13 @@ def _get_caption(node: dict) -> str:
         edges = cap.get("edges", [])
         if edges:
             return edges[0].get("node", {}).get("text", "")
-    return node.get("caption", {}).get("text", "") if isinstance(node.get("caption"), dict) else ""
+    c = node.get("caption")
+    if isinstance(c, dict):
+        return c.get("text", "")
+    return ""
 
 
-def _ts_to_iso(ts) -> str:
+def _ts_to_iso(ts):
     if ts is None:
         return None
     try:
@@ -317,7 +441,7 @@ def _ts_to_iso(ts) -> str:
         return None
 
 
-def _parse_meta_count(text: str, pattern: str) -> int:
+def _parse_meta_count(text: str, pattern: str):
     m = re.search(pattern, text, re.IGNORECASE)
     if not m:
         return None
@@ -337,35 +461,48 @@ def _parse_meta_count(text: str, pattern: str) -> int:
 
 def scrape_and_store(username: str, headless: bool = True) -> bool:
     """Scrape a profile and store in the database."""
-    import db
+    sys.path.insert(0, str(Path(__file__).parent))
+    from scraper.db import add_profile, update_profile, add_posts, get_profile, log_scrape
 
     result = scrape_profile(username, headless=headless)
     if not result:
-        # Log failure
-        profile = db.get_profile(username, "instagram")
-        if profile:
-            db.log_scrape(profile["id"], "error", error_message="No data extracted")
+        existing = get_profile(username, "instagram")
+        if existing:
+            log_scrape(existing["id"], "error", error_message="No data extracted")
         return False
 
-    profile_data = result["profile"]
-    posts = result["posts"]
-
-    pid = db.upsert_profile(username, "instagram", profile_data)
-    db.upsert_posts(pid, posts)
-    db.log_scrape(pid, "success", posts_found=len(posts), duration_ms=result["elapsed_ms"])
+    p = result["profile"]
+    pid = add_profile(username, "instagram")
+    update_profile(pid,
+        display_name=p.get("display_name", ""),
+        bio=p.get("bio", ""),
+        avatar_url=p.get("avatar_url", ""),
+        followers=p.get("followers", 0),
+        following=p.get("following", 0),
+        total_likes=p.get("total_likes", 0),
+        post_count=p.get("post_count", 0),
+        avg_views=p.get("avg_views", 0),
+        last_scraped_at=datetime.utcnow().isoformat(),
+    )
+    add_posts(pid, result["posts"])
+    log_scrape(pid, "success", posts_found=len(result["posts"]), duration_ms=result["elapsed_ms"])
     return True
 
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("Usage: python3 instagram.py <username>")
+        print("       python3 instagram.py --login")
         sys.exit(1)
+
+    sys.path.insert(0, str(Path(__file__).parent))
+
+    if sys.argv[1] == "--login":
+        login_interactive()
+        sys.exit(0)
 
     target = sys.argv[1].lstrip("@")
     headless = "--visible" not in sys.argv
-
-    # Add scraper dir to path for db import
-    sys.path.insert(0, str(Path(__file__).parent))
 
     result = scrape_profile(target, headless=headless)
     if result:
@@ -385,11 +522,24 @@ if __name__ == "__main__":
             print(f"   {vid} {post['platform_id'][:12]}  {vs:.1f}x viral  ❤️ {likes:,}  💬 {comments:,}")
 
         # Store in DB
-        import db
-        pid = db.upsert_profile(target, "instagram", result["profile"])
-        db.upsert_posts(pid, result["posts"])
-        db.log_scrape(pid, "success", posts_found=len(result["posts"]), duration_ms=result["elapsed_ms"])
+        from scraper.db import add_profile, update_profile, add_posts, log_scrape
+        p = result["profile"]
+        pid = add_profile(target, "instagram")
+        update_profile(pid,
+            display_name=p.get("display_name", ""),
+            bio=p.get("bio", ""),
+            avatar_url=p.get("avatar_url", ""),
+            followers=p.get("followers", 0),
+            following=p.get("following", 0),
+            total_likes=p.get("total_likes", 0),
+            post_count=p.get("post_count", 0),
+            avg_views=p.get("avg_views", 0),
+            last_scraped_at=datetime.utcnow().isoformat(),
+        )
+        add_posts(pid, result["posts"])
+        log_scrape(pid, "success", posts_found=len(result["posts"]), duration_ms=result["elapsed_ms"])
         print(f"\n   💾 Stored in database (profile_id={pid})")
     else:
         print(f"\n❌ Failed to scrape {target}")
+        print("   If you haven't logged in yet, run: python3 instagram.py --login")
         sys.exit(1)
