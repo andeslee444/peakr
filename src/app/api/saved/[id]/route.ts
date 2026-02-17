@@ -8,9 +8,12 @@ export async function DELETE(
   try {
     const { id } = await params;
     const db = getDb();
-    db.prepare('DELETE FROM saved_posts WHERE id = ?').run(id);
+    const result = db.prepare('DELETE FROM saved_posts WHERE id = ?').run(id);
+    if (result.changes === 0) {
+      return NextResponse.json({ error: 'Saved post not found' }, { status: 404 });
+    }
     return NextResponse.json({ ok: true });
-  } catch (e: any) {
-    return NextResponse.json({ error: e.message }, { status: 500 });
+  } catch {
+    return NextResponse.json({ error: 'Failed to delete saved post' }, { status: 500 });
   }
 }

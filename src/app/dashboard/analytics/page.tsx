@@ -3,6 +3,29 @@
 import { useState, useEffect } from 'react';
 import { formatNumber, formatViralScore } from '@/lib/format';
 
+interface AccountStat {
+  username: string;
+  platform: string;
+  followers: number;
+  avatar_url: string | null;
+  display_name: string | null;
+  post_count: number;
+  avg_views: number;
+  avg_viral_score: number;
+  max_viral_score: number;
+  total_views: number;
+  engagement_rate: number;
+}
+
+interface TopPost {
+  id: number;
+  username: string;
+  platform: string;
+  avatar_url: string | null;
+  views: number;
+  viral_score: number;
+}
+
 interface AnalyticsData {
   overview: {
     totalAccounts: number;
@@ -12,8 +35,8 @@ interface AnalyticsData {
     totalViews: number;
     viralPostCount: number;
   };
-  accountStats: any[];
-  topPosts: any[];
+  accountStats: AccountStat[];
+  topPosts: TopPost[];
 }
 
 export default function AnalyticsPage() {
@@ -103,7 +126,7 @@ export default function AnalyticsPage() {
                 </tr>
               </thead>
               <tbody>
-                {data!.accountStats.map((a: any, i: number) => (
+                {data!.accountStats.map((a, i) => (
                   <tr key={i} className="border-b border-gray-50 hover:bg-gray-50">
                     <td className="py-4 px-4 font-medium text-gray-900">@{a.username}</td>
                     <td className="py-4 px-4 text-gray-600">{a.platform === 'instagram' ? '📸' : '🎵'} {a.platform}</td>
@@ -134,7 +157,7 @@ export default function AnalyticsPage() {
           <p className="text-gray-500 text-center py-8">No posts tracked yet.</p>
         ) : (
           <div className="space-y-3">
-            {data!.topPosts.map((post: any, i: number) => (
+            {data!.topPosts.map((post, i) => (
               <div key={post.id} className="flex items-center justify-between p-4 bg-gray-50 rounded-xl hover:bg-gray-100 transition-colors cursor-pointer">
                 <div className="flex items-center space-x-4">
                   <span className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-white ${

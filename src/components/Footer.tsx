@@ -36,14 +36,14 @@ export default function Footer() {
             <h3 className="font-semibold mb-4">Peakr</h3>
             <ul className="space-y-2">
               <li>
-                <button className="text-gray-400 hover:text-white transition-colors">
+                <Link href="/#features" className="text-gray-400 hover:text-white transition-colors">
                   About
-                </button>
+                </Link>
               </li>
               <li>
-                <button className="text-gray-400 hover:text-white transition-colors">
+                <Link href="/#pricing" className="text-gray-400 hover:text-white transition-colors">
                   Pricing
-                </button>
+                </Link>
               </li>
             </ul>
           </div>
@@ -52,14 +52,10 @@ export default function Footer() {
             <h3 className="font-semibold mb-4">Legal</h3>
             <ul className="space-y-2">
               <li>
-                <Link href="/privacy" className="text-gray-400 hover:text-white transition-colors">
-                  Privacy
-                </Link>
+                <span className="text-gray-400">Privacy</span>
               </li>
               <li>
-                <Link href="/terms" className="text-gray-400 hover:text-white transition-colors">
-                  Terms
-                </Link>
+                <span className="text-gray-400">Terms</span>
               </li>
             </ul>
           </div>
@@ -68,9 +64,9 @@ export default function Footer() {
             <h3 className="font-semibold mb-4">Support</h3>
             <ul className="space-y-2">
               <li>
-                <Link href="/contact" className="text-gray-400 hover:text-white transition-colors">
+                <a href="mailto:support@peakr.app" className="text-gray-400 hover:text-white transition-colors">
                   Contact Us
-                </Link>
+                </a>
               </li>
             </ul>
           </div>
@@ -78,7 +74,7 @@ export default function Footer() {
 
         <div className="mt-12 pt-8 border-t border-gray-800 flex flex-col md:flex-row justify-between items-center">
           <p className="text-gray-400 text-sm">
-            © {new Date().getFullYear()} Peakr. All rights reserved.
+            &copy; {new Date().getFullYear()} Peakr. All rights reserved.
           </p>
           <div className="flex space-x-4 mt-4 md:mt-0">
             <a

@@ -1,46 +1,21 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import Image from 'next/image';
 import { formatNumber, formatViralScore } from '@/lib/format';
-
-interface Profile {
-  id: number;
-  username: string;
-  platform: string;
-  avatar_url: string | null;
-  followers: number;
-  post_count_actual: number;
-  avg_views_calc: number;
-}
-
-interface Post {
-  id: number;
-  username: string;
-  platform: string;
-  avatar_url: string | null;
-  thumbnail_url: string | null;
-  views: number;
-  likes: number;
-  comments: number;
-  shares: number;
-  viral_score: number;
-  posted_at: string | null;
-  description: string | null;
-}
-
-const avatarEmoji: Record<string, string> = {
-  yukatsunami: '🌊', 'remi.tswjourney': '🎯', cheekyglo: '💫', midnightmischief: '🌙',
-};
+import type { Profile, Post } from '@/lib/types';
 
 export default function DashboardPage() {
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [posts, setPosts] = useState<Post[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
-  const [selectedPlatform, setSelectedPlatform] = useState<string>('all');
-  const [sortBy, setSortBy] = useState<string>('viral_score');
-  const [searchResults, setSearchResults] = useState<any[] | null>(null);
-  const [searching, setSearching] = useState(false);
+  const [selectedPlatform, setSelectedPlatform] = useState('all');
+  const [sortBy, setSortBy] = useState('viral_score');
+  const [trackUsername, setTrackUsername] = useState('');
+  const [trackPlatform, setTrackPlatform] = useState<'instagram' | 'tiktok'>('instagram');
+  const [trackStatus, setTrackStatus] = useState<{ type: 'idle' | 'loading' | 'success' | 'error'; message?: string }>({ type: 'idle' });
+  const [savingId, setSavingId] = useState<number | null>(null);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -63,41 +38,58 @@ export default function DashboardPage() {
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
-  // Real-time search
-  useEffect(() => {
-    if (!searchQuery || !searchQuery.startsWith('@')) {
-      setSearchResults(null);
-      return;
-    }
-    const timeout = setTimeout(async () => {
-      setSearching(true);
-      try {
-        const res = await fetch(`/api/search?q=${encodeURIComponent(searchQuery)}`);
-        const data = await res.json();
-        setSearchResults(data.profiles || []);
-      } catch {
-        setSearchResults([]);
-      } finally {
-        setSearching(false);
-      }
-    }, 300);
-    return () => clearTimeout(timeout);
-  }, [searchQuery]);
+  const trackUser = async () => {
+    const clean = trackUsername.replace(/^@/, '').trim();
+    if (!clean) return;
 
-  const trackUser = async (username: string, platform: string) => {
-    await fetch('/api/track', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, platform }),
-    });
-    fetchData();
-    setSearchQuery('');
-    setSearchResults(null);
+    setTrackStatus({ type: 'loading' });
+    try {
+      const res = await fetch('/api/track', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: clean, platform: trackPlatform }),
+      });
+      const data = await res.json();
+
+      if (!res.ok || !data.success) {
+        setTrackStatus({ type: 'error', message: data.error || 'Failed to track profile' });
+      } else {
+        setTrackStatus({ type: 'success', message: `Successfully tracking @${clean}!` });
+        setTrackUsername('');
+        await fetchData();
+      }
+    } catch {
+      setTrackStatus({ type: 'error', message: 'Network error. Please try again.' });
+    }
+
+    setTimeout(() => setTrackStatus({ type: 'idle' }), 3000);
   };
 
-  const filteredPosts = posts.filter(p =>
-    !searchQuery || searchQuery.startsWith('@') || p.username?.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const untrackUser = async (username: string, platform: string) => {
+    await fetch(`/api/profiles/${encodeURIComponent(username)}?platform=${platform}`, {
+      method: 'DELETE',
+    });
+    fetchData();
+  };
+
+  const savePost = async (postId: number) => {
+    setSavingId(postId);
+    try {
+      await fetch('/api/saved', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ post_id: postId, folder: 'default' }),
+      });
+    } finally {
+      setSavingId(null);
+    }
+  };
+
+  const filteredPosts = posts.filter(p => {
+    if (!searchQuery) return true;
+    const q = searchQuery.toLowerCase();
+    return p.username?.toLowerCase().includes(q) || p.description?.toLowerCase().includes(q);
+  });
 
   const exportCSV = () => window.open('/api/export?format=csv', '_blank');
 
@@ -111,48 +103,11 @@ export default function DashboardPage() {
           </svg>
           <input
             type="text"
-            placeholder="Search @username to track..."
+            placeholder="Filter posts by username or description..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="w-full pl-12 pr-4 py-3 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
           />
-
-          {/* Search dropdown */}
-          {searchQuery.startsWith('@') && (
-            <div className="absolute top-full left-0 right-0 mt-2 bg-white rounded-xl shadow-lg border border-gray-200 z-50 overflow-hidden">
-              {searching ? (
-                <div className="p-4 text-center text-gray-500">Searching...</div>
-              ) : searchResults && searchResults.length > 0 ? (
-                searchResults.map((p: any) => (
-                  <div key={p.id} className="flex items-center justify-between p-4 hover:bg-gray-50 cursor-pointer border-b border-gray-50">
-                    <div>
-                      <p className="font-medium text-gray-900">@{p.username}</p>
-                      <p className="text-xs text-gray-500">{p.platform} • {formatNumber(p.followers)} followers • {formatNumber(Math.round(p.total_views || 0))} total views</p>
-                    </div>
-                    <span className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded-full">Tracked</span>
-                  </div>
-                ))
-              ) : searchResults !== null ? (
-                <div className="p-4">
-                  <p className="text-gray-600 text-sm">Not tracked yet.</p>
-                  <div className="flex gap-2 mt-2">
-                    <button
-                      onClick={() => trackUser(searchQuery.replace('@', ''), 'instagram')}
-                      className="text-xs bg-pink-100 text-pink-700 px-3 py-1.5 rounded-full hover:bg-pink-200"
-                    >
-                      📸 Track on Instagram
-                    </button>
-                    <button
-                      onClick={() => trackUser(searchQuery.replace('@', ''), 'tiktok')}
-                      className="text-xs bg-blue-100 text-blue-700 px-3 py-1.5 rounded-full hover:bg-blue-200"
-                    >
-                      🎵 Track on TikTok
-                    </button>
-                  </div>
-                </div>
-              ) : null}
-            </div>
-          )}
         </div>
 
         <div className="flex gap-2">
@@ -180,36 +135,86 @@ export default function DashboardPage() {
             onClick={exportCSV}
             className="px-4 py-3 border border-gray-200 rounded-xl hover:bg-gray-50 transition-colors text-gray-700 font-medium"
           >
-            📥 Export
+            Export
           </button>
         </div>
       </div>
 
       {/* Tracked accounts */}
       <div className="bg-white rounded-2xl p-6 card-shadow">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold text-gray-900">Tracked Accounts</h2>
-          <button
-            onClick={() => setSearchQuery('@')}
-            className="text-indigo-600 text-sm font-medium hover:text-indigo-700"
+        <h2 className="text-lg font-semibold text-gray-900 mb-4">Tracked Accounts</h2>
+
+        {/* Inline track form */}
+        <div className="flex flex-col sm:flex-row gap-2 mb-4">
+          <input
+            type="text"
+            placeholder="Enter username..."
+            value={trackUsername}
+            onChange={(e) => setTrackUsername(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter' && trackStatus.type !== 'loading') trackUser(); }}
+            disabled={trackStatus.type === 'loading'}
+            className="flex-1 px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent disabled:opacity-50"
+          />
+          <select
+            value={trackPlatform}
+            onChange={(e) => setTrackPlatform(e.target.value as 'instagram' | 'tiktok')}
+            disabled={trackStatus.type === 'loading'}
+            className="px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white disabled:opacity-50"
           >
-            + Add Account
+            <option value="instagram">Instagram</option>
+            <option value="tiktok">TikTok</option>
+          </select>
+          <button
+            onClick={trackUser}
+            disabled={trackStatus.type === 'loading' || !trackUsername.trim()}
+            className="px-5 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors font-medium disabled:opacity-50 flex items-center justify-center gap-2"
+          >
+            {trackStatus.type === 'loading' ? (
+              <>
+                <span className="animate-spin inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full" />
+                Tracking...
+              </>
+            ) : (
+              'Track'
+            )}
           </button>
         </div>
+
+        {/* Status banner */}
+        {trackStatus.type === 'success' && (
+          <div className="mb-4 px-4 py-2 bg-green-50 border border-green-200 text-green-700 rounded-lg text-sm">
+            {trackStatus.message}
+          </div>
+        )}
+        {trackStatus.type === 'error' && (
+          <div className="mb-4 px-4 py-2 bg-red-50 border border-red-200 text-red-700 rounded-lg text-sm">
+            {trackStatus.message}
+          </div>
+        )}
+
         {loading ? (
           <div className="text-center py-4 text-gray-500">Loading...</div>
         ) : profiles.length === 0 ? (
-          <p className="text-gray-500 text-center py-4">No tracked accounts. Search @username above to add one.</p>
+          <p className="text-gray-500 text-center py-4">No tracked accounts yet. Add a username above to get started.</p>
         ) : (
           <div className="flex gap-4 overflow-x-auto pb-2">
             {profiles.map(account => (
-              <div key={account.id} className="flex-shrink-0 bg-gray-50 rounded-xl p-4 min-w-[180px] hover:bg-gray-100 cursor-pointer transition-colors">
+              <div key={account.id} className="relative flex-shrink-0 bg-gray-50 rounded-xl p-4 min-w-[180px] hover:bg-gray-100 transition-colors group">
+                <button
+                  onClick={() => untrackUser(account.username, account.platform)}
+                  className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity text-gray-400 hover:text-red-500 p-1"
+                  title="Untrack"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
                 <div className="flex items-center space-x-3">
-                  <div className="w-12 h-12 rounded-full bg-gradient-to-br from-purple-400 to-pink-500 flex items-center justify-center text-2xl overflow-hidden">
+                  <div className="relative w-12 h-12 rounded-full bg-gradient-to-br from-purple-400 to-pink-500 flex items-center justify-center text-2xl overflow-hidden">
                     {account.avatar_url ? (
-                      <img src={account.avatar_url} alt="" className="w-full h-full object-cover" />
+                      <Image src={account.avatar_url} alt="" fill className="object-cover" unoptimized />
                     ) : (
-                      avatarEmoji[account.username] || '👤'
+                      '👤'
                     )}
                   </div>
                   <div>
@@ -242,10 +247,14 @@ export default function DashboardPage() {
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
             {filteredPosts.map(item => (
-              <div key={item.id} className="bg-white rounded-2xl overflow-hidden card-shadow hover:shadow-lg transition-shadow cursor-pointer">
+              <div
+                key={item.id}
+                onClick={() => item.post_url && window.open(item.post_url, '_blank')}
+                className="bg-white rounded-2xl overflow-hidden card-shadow hover:shadow-lg transition-shadow cursor-pointer"
+              >
                 <div className="relative aspect-[9/16] bg-gradient-to-br from-purple-400 to-pink-500 flex items-center justify-center overflow-hidden">
                   {item.thumbnail_url ? (
-                    <img src={item.thumbnail_url} alt="" className="absolute inset-0 w-full h-full object-cover" />
+                    <Image src={item.thumbnail_url} alt="" fill className="object-cover" unoptimized />
                   ) : (
                     <span className="text-6xl">{item.platform === 'instagram' ? '📸' : '🎵'}</span>
                   )}
@@ -260,8 +269,12 @@ export default function DashboardPage() {
                     <span>{formatNumber(item.views)}</span>
                   </div>
 
-                  <button className="absolute bottom-3 right-3 bg-white/90 hover:bg-white p-2 rounded-full transition-colors">
-                    <svg className="w-5 h-5 text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <button
+                    onClick={(e) => { e.stopPropagation(); savePost(item.id); }}
+                    disabled={savingId === item.id}
+                    className="absolute bottom-3 right-3 bg-white/90 hover:bg-white p-2 rounded-full transition-colors"
+                  >
+                    <svg className="w-5 h-5 text-gray-700" fill={savingId === item.id ? 'currentColor' : 'none'} stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
                     </svg>
                   </button>
@@ -269,11 +282,11 @@ export default function DashboardPage() {
 
                 <div className="p-4">
                   <div className="flex items-center space-x-2">
-                    <div className="w-8 h-8 rounded-full bg-gradient-to-br from-purple-400 to-pink-500 flex items-center justify-center text-sm overflow-hidden">
+                    <div className="relative w-8 h-8 rounded-full bg-gradient-to-br from-purple-400 to-pink-500 flex items-center justify-center text-sm overflow-hidden">
                       {item.avatar_url ? (
-                        <img src={item.avatar_url} alt="" className="w-full h-full object-cover" />
+                        <Image src={item.avatar_url} alt="" fill className="object-cover" unoptimized />
                       ) : (
-                        avatarEmoji[item.username] || '👤'
+                        '👤'
                       )}
                     </div>
                     <div>

@@ -1,23 +1,9 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import Image from 'next/image';
 import { formatNumber, formatViralScore } from '@/lib/format';
-
-interface Post {
-  id: number;
-  username: string;
-  platform: string;
-  avatar_url: string | null;
-  thumbnail_url: string | null;
-  views: number;
-  likes: number;
-  comments: number;
-  shares: number;
-  viral_score: number;
-  description: string | null;
-  posted_at: string | null;
-  post_url: string | null;
-}
+import type { Post } from '@/lib/types';
 
 const platformEmoji: Record<string, string> = { instagram: '📸', tiktok: '🎵' };
 
@@ -25,9 +11,10 @@ export default function ExplorePage() {
   const [posts, setPosts] = useState<Post[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
-  const [selectedPlatform, setSelectedPlatform] = useState<string>('all');
-  const [sortBy, setSortBy] = useState<string>('viral_score');
+  const [selectedPlatform, setSelectedPlatform] = useState('all');
+  const [sortBy, setSortBy] = useState('viral_score');
   const [savingId, setSavingId] = useState<number | null>(null);
+  const [trackingUser, setTrackingUser] = useState<string | null>(null);
 
   const fetchPosts = useCallback(async () => {
     setLoading(true);
@@ -64,11 +51,17 @@ export default function ExplorePage() {
   };
 
   const trackUser = async (username: string, platform: string) => {
-    await fetch('/api/track', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, platform }),
-    });
+    const key = `${platform}:${username}`;
+    setTrackingUser(key);
+    try {
+      await fetch('/api/track', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, platform }),
+      });
+    } finally {
+      setTrackingUser(null);
+    }
   };
 
   return (
@@ -126,60 +119,78 @@ export default function ExplorePage() {
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-          {filtered.map((item) => (
-            <div key={item.id} className="bg-white rounded-2xl overflow-hidden card-shadow hover:shadow-lg transition-shadow cursor-pointer">
-              <div className="relative aspect-[9/16] bg-gradient-to-br from-purple-400 to-pink-500 flex items-center justify-center overflow-hidden">
-                {item.thumbnail_url ? (
-                  <img src={item.thumbnail_url} alt="" className="absolute inset-0 w-full h-full object-cover" />
-                ) : (
-                  <span className="text-6xl">{platformEmoji[item.platform] || '📱'}</span>
-                )}
+          {filtered.map((item) => {
+            const trackKey = `${item.platform}:${item.username}`;
+            const isTracking = trackingUser === trackKey;
+            return (
+              <div
+                key={item.id}
+                onClick={() => item.post_url && window.open(item.post_url, '_blank')}
+                className="bg-white rounded-2xl overflow-hidden card-shadow hover:shadow-lg transition-shadow cursor-pointer"
+              >
+                <div className="relative aspect-[9/16] bg-gradient-to-br from-purple-400 to-pink-500 flex items-center justify-center overflow-hidden">
+                  {item.thumbnail_url ? (
+                    <Image src={item.thumbnail_url} alt="" fill className="object-cover" unoptimized />
+                  ) : (
+                    <span className="text-6xl">{platformEmoji[item.platform] || '📱'}</span>
+                  )}
 
-                <div className="absolute top-3 left-3 viral-badge text-white text-xs font-bold px-2 py-1 rounded-full flex items-center space-x-1">
-                  <span>🔥</span>
-                  <span>{formatViralScore(item.viral_score)}</span>
+                  <div className="absolute top-3 left-3 viral-badge text-white text-xs font-bold px-2 py-1 rounded-full flex items-center space-x-1">
+                    <span>🔥</span>
+                    <span>{formatViralScore(item.viral_score)}</span>
+                  </div>
+
+                  <div className="absolute top-3 right-3 bg-black/50 text-white text-xs font-medium px-2 py-1 rounded-full flex items-center space-x-1">
+                    <span>👁️</span>
+                    <span>{formatNumber(item.views)}</span>
+                  </div>
+
+                  <button
+                    onClick={(e) => { e.stopPropagation(); trackUser(item.username, item.platform); }}
+                    disabled={isTracking}
+                    className="absolute bottom-3 left-3 bg-white/90 hover:bg-white px-3 py-1.5 rounded-full text-sm font-medium text-gray-700 transition-colors flex items-center space-x-1 disabled:opacity-50"
+                  >
+                    {isTracking ? (
+                      <span className="flex items-center gap-1">
+                        <span className="animate-spin inline-block w-3 h-3 border-2 border-gray-500 border-t-transparent rounded-full" />
+                        <span>Tracking</span>
+                      </span>
+                    ) : (
+                      <>
+                        <span>+</span>
+                        <span>Track</span>
+                      </>
+                    )}
+                  </button>
+
+                  <button
+                    onClick={(e) => { e.stopPropagation(); savePost(item.id); }}
+                    disabled={savingId === item.id}
+                    className="absolute bottom-3 right-3 bg-white/90 hover:bg-white p-2 rounded-full transition-colors"
+                  >
+                    <svg className="w-5 h-5 text-gray-700" fill={savingId === item.id ? 'currentColor' : 'none'} stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
+                    </svg>
+                  </button>
                 </div>
 
-                <div className="absolute top-3 right-3 bg-black/50 text-white text-xs font-medium px-2 py-1 rounded-full flex items-center space-x-1">
-                  <span>👁️</span>
-                  <span>{formatNumber(item.views)}</span>
+                <div className="p-4">
+                  <div className="flex items-center space-x-2">
+                    <span className="text-xs">{platformEmoji[item.platform] || '📱'}</span>
+                    <p className="font-medium text-gray-900 text-sm">@{item.username}</p>
+                  </div>
+                  {item.description && (
+                    <p className="text-xs text-gray-500 mt-1 line-clamp-2">{item.description}</p>
+                  )}
+                  <div className="flex items-center justify-between mt-2 text-xs text-gray-500">
+                    <span className="flex items-center space-x-1"><span>❤️</span><span>{formatNumber(item.likes)}</span></span>
+                    <span className="flex items-center space-x-1"><span>💬</span><span>{formatNumber(item.comments)}</span></span>
+                    <span className="flex items-center space-x-1"><span>↗️</span><span>{formatNumber(item.shares)}</span></span>
+                  </div>
                 </div>
-
-                <button
-                  onClick={(e) => { e.stopPropagation(); trackUser(item.username, item.platform); }}
-                  className="absolute bottom-3 left-3 bg-white/90 hover:bg-white px-3 py-1.5 rounded-full text-sm font-medium text-gray-700 transition-colors flex items-center space-x-1"
-                >
-                  <span>+</span>
-                  <span>Track</span>
-                </button>
-
-                <button
-                  onClick={(e) => { e.stopPropagation(); savePost(item.id); }}
-                  disabled={savingId === item.id}
-                  className="absolute bottom-3 right-3 bg-white/90 hover:bg-white p-2 rounded-full transition-colors"
-                >
-                  <svg className="w-5 h-5 text-gray-700" fill={savingId === item.id ? 'currentColor' : 'none'} stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
-                  </svg>
-                </button>
               </div>
-
-              <div className="p-4">
-                <div className="flex items-center space-x-2">
-                  <span className="text-xs">{platformEmoji[item.platform] || '📱'}</span>
-                  <p className="font-medium text-gray-900 text-sm">@{item.username}</p>
-                </div>
-                {item.description && (
-                  <p className="text-xs text-gray-500 mt-1 line-clamp-2">{item.description}</p>
-                )}
-                <div className="flex items-center justify-between mt-2 text-xs text-gray-500">
-                  <span className="flex items-center space-x-1"><span>❤️</span><span>{formatNumber(item.likes)}</span></span>
-                  <span className="flex items-center space-x-1"><span>💬</span><span>{formatNumber(item.comments)}</span></span>
-                  <span className="flex items-center space-x-1"><span>↗️</span><span>{formatNumber(item.shares)}</span></span>
-                </div>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>

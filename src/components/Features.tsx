@@ -44,7 +44,7 @@ export default function Features() {
   return (
     <>
       {/* Pain Points Section */}
-      <section className="py-16 px-4 bg-gray-50">
+      <section id="features" className="py-16 px-4 bg-gray-50">
         <div className="max-w-4xl mx-auto">
           <h2 className="text-3xl md:text-4xl font-bold text-center text-gray-900 mb-12">
             With Peakr you can stop:

@@ -27,21 +27,37 @@ COOKIE_FILE = COOKIE_DIR / "instagram.json"
 IG_APP_ID = "936619743392459"
 
 
-def _get_browser_and_context(headless=True):
-    from camoufox.sync_api import Camoufox
-    browser = Camoufox(headless=headless, humanize=True, proxy=PROXY, geoip=True)
-    cm = browser.__enter__()
-    ctx = cm.new_context()
-    # Load saved cookies
-    if COOKIE_FILE.exists():
+class BrowserSession:
+    """Context manager wrapping Camoufox browser + context with cookie loading."""
+
+    def __init__(self, headless=True):
+        self.headless = headless
+        self._browser = None
+        self._cm = None
+        self.ctx = None
+
+    def __enter__(self):
+        from camoufox.sync_api import Camoufox
+        self._browser = Camoufox(headless=self.headless, humanize=True, proxy=PROXY, geoip=True)
+        self._cm = self._browser.__enter__()
+        self.ctx = self._cm.new_context()
+        if COOKIE_FILE.exists():
+            try:
+                cookies = json.loads(COOKIE_FILE.read_text())
+                if cookies:
+                    self.ctx.add_cookies(cookies)
+                    log.info("Loaded saved session cookies")
+            except Exception as e:
+                log.warning(f"Failed to load cookies: {e}")
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
         try:
-            cookies = json.loads(COOKIE_FILE.read_text())
-            if cookies:
-                ctx.add_cookies(cookies)
-                log.info("Loaded saved session cookies")
+            if self._cm:
+                self._browser.__exit__(exc_type, exc_val, exc_tb)
         except Exception as e:
-            log.warning(f"Failed to load cookies: {e}")
-    return cm, ctx
+            log.warning(f"Error closing browser: {e}")
+        return False
 
 
 def _save_cookies(ctx):

@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import { getDb } from '@/lib/db';
+
+const USERNAME_RE = /^[a-zA-Z0-9_.]{1,30}$/;
 
 export async function POST(req: NextRequest) {
   try {
@@ -13,24 +15,36 @@ export async function POST(req: NextRequest) {
     }
 
     const clean = username.replace(/^@/, '');
+    if (!USERNAME_RE.test(clean)) {
+      return NextResponse.json({ error: 'invalid username format' }, { status: 400 });
+    }
 
     // Trigger the appropriate Python scraper
     const scraperModule = platform === 'instagram' ? 'scraper.instagram' : 'scraper.tiktok';
     try {
-      execSync(
-        `cd ${process.cwd()} && python3 -m ${scraperModule} ${clean}`,
-        { timeout: 90000, stdio: 'pipe' }
-      );
-    } catch (e: any) {
-      console.error('Scraper error:', e.stderr?.toString());
+      execFileSync('python3', ['-m', scraperModule, clean], {
+        timeout: 90000,
+        stdio: 'pipe',
+        cwd: process.cwd(),
+      });
+    } catch (e: unknown) {
+      const stderr = e instanceof Error && 'stderr' in e ? (e as NodeJS.ErrnoException & { stderr?: Buffer }).stderr : null;
+      console.error('Scraper error:', stderr?.toString());
     }
 
     // Read back from DB
     const db = getDb();
     const profile = db.prepare('SELECT * FROM profiles WHERE username = ? AND platform = ?').get(clean, platform);
 
+    if (!profile) {
+      return NextResponse.json(
+        { success: false, error: 'Could not find this profile. Check the username and try again.' },
+        { status: 404 }
+      );
+    }
+
     return NextResponse.json({ success: true, profile });
-  } catch (e: any) {
-    return NextResponse.json({ error: e.message }, { status: 500 });
+  } catch {
+    return NextResponse.json({ error: 'Failed to track profile' }, { status: 500 });
   }
 }

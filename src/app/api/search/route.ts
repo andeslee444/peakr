@@ -24,7 +24,7 @@ export async function GET(request: Request) {
     `).all(`%${username}%`);
 
     return NextResponse.json({ profiles, found: profiles.length > 0 });
-  } catch (e: any) {
-    return NextResponse.json({ profiles: [], found: false, error: e.message }, { status: 500 });
+  } catch {
+    return NextResponse.json({ profiles: [], found: false, error: 'Search failed' }, { status: 500 });
   }
 }

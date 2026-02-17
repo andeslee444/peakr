@@ -12,7 +12,7 @@ export async function GET(request: Request) {
       FROM profiles pr
       LEFT JOIN posts p ON p.profile_id = pr.id
     `;
-    const params: any[] = [];
+    const params: string[] = [];
     if (platform && platform !== 'all') {
       query += ' WHERE pr.platform = ?';
       params.push(platform);
@@ -21,7 +21,7 @@ export async function GET(request: Request) {
 
     const profiles = db.prepare(query).all(...params);
     return NextResponse.json({ profiles });
-  } catch (e: any) {
-    return NextResponse.json({ profiles: [], error: e.message }, { status: 500 });
+  } catch {
+    return NextResponse.json({ profiles: [], error: 'Failed to fetch profiles' }, { status: 500 });
   }
 }

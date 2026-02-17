@@ -1,22 +1,9 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import Image from 'next/image';
 import { formatNumber, formatViralScore } from '@/lib/format';
-
-interface SavedPost {
-  id: number;
-  post_id: number;
-  folder: string;
-  saved_at: string;
-  username: string;
-  platform: string;
-  views: number;
-  likes: number;
-  viral_score: number;
-  thumbnail_url: string | null;
-  post_url: string | null;
-  description: string | null;
-}
+import type { SavedPost } from '@/lib/types';
 
 export default function SavedPage() {
   const [saved, setSaved] = useState<SavedPost[]>([]);
@@ -45,8 +32,14 @@ export default function SavedPage() {
   useEffect(() => { fetchSaved(); }, [fetchSaved]);
 
   const removeSaved = async (id: number) => {
-    await fetch(`/api/saved/${id}`, { method: 'DELETE' });
-    setSaved(prev => prev.filter(s => s.id !== id));
+    try {
+      const res = await fetch(`/api/saved/${id}`, { method: 'DELETE' });
+      if (res.ok) {
+        setSaved(prev => prev.filter(s => s.id !== id));
+      }
+    } catch {
+      // Keep item in UI if delete failed
+    }
   };
 
   const allFolders = ['All', ...folders.filter(f => f !== 'All')];
@@ -73,7 +66,14 @@ export default function SavedPage() {
             className="px-4 py-2 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
           />
           <button
-            onClick={() => { if (newFolder) { setFolders(prev => [...prev, newFolder]); setNewFolder(''); setShowNewFolder(false); } }}
+            onClick={() => {
+              if (newFolder && !folders.includes(newFolder)) {
+                setFolders(prev => [...prev, newFolder]);
+                setSelectedFolder(newFolder);
+              }
+              setNewFolder('');
+              setShowNewFolder(false);
+            }}
             className="px-4 py-2 bg-indigo-600 text-white rounded-xl"
           >
             Create
@@ -109,10 +109,14 @@ export default function SavedPage() {
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
           {saved.map(item => (
-            <div key={item.id} className="bg-white rounded-2xl overflow-hidden card-shadow hover:shadow-lg transition-shadow cursor-pointer group">
+            <div
+              key={item.id}
+              onClick={() => item.post_url && window.open(item.post_url, '_blank')}
+              className="bg-white rounded-2xl overflow-hidden card-shadow hover:shadow-lg transition-shadow cursor-pointer group"
+            >
               <div className="relative aspect-[9/16] bg-gradient-to-br from-purple-400 to-pink-500 flex items-center justify-center overflow-hidden">
                 {item.thumbnail_url ? (
-                  <img src={item.thumbnail_url} alt="" className="absolute inset-0 w-full h-full object-cover" />
+                  <Image src={item.thumbnail_url} alt="" fill className="object-cover" unoptimized />
                 ) : (
                   <span className="text-6xl">{item.platform === 'instagram' ? '📸' : '🎵'}</span>
                 )}

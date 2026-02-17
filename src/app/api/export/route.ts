@@ -1,6 +1,10 @@
 import { NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
 
+interface ExportRow {
+  [key: string]: string | number | null;
+}
+
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
@@ -14,7 +18,7 @@ export async function GET(request: Request) {
       FROM posts p
       JOIN profiles pr ON p.profile_id = pr.id
       ORDER BY p.viral_score DESC
-    `).all() as any[];
+    `).all() as ExportRow[];
 
     if (format === 'csv') {
       const headers = ['username', 'platform', 'followers', 'following', 'description', 'views', 'likes', 'comments', 'shares', 'viral_score', 'post_url', 'posted_at'];
@@ -23,7 +27,7 @@ export async function GET(request: Request) {
         csvRows.push(headers.map(h => {
           const val = row[h] ?? '';
           const str = String(val).replace(/"/g, '""');
-          return str.includes(',') || str.includes('"') || str.includes('\n') ? `"${str}"` : str;
+          return str.includes(',') || str.includes('"') || str.includes('\n') || str.includes('\r') ? `"${str}"` : str;
         }).join(','));
       }
       const csv = csvRows.join('\n');
@@ -37,7 +41,7 @@ export async function GET(request: Request) {
 
     // JSON fallback
     return NextResponse.json({ rows });
-  } catch (e: any) {
-    return NextResponse.json({ error: e.message }, { status: 500 });
+  } catch {
+    return NextResponse.json({ error: 'Failed to export data' }, { status: 500 });
   }
 }

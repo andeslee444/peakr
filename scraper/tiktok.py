@@ -1,10 +1,11 @@
-"""TikTok profile scraper using curl_cffi + WARP proxy."""
+"""TikTok profile scraper using curl_cffi for profile data + yt-dlp for videos."""
 
 import json
 import re
+import subprocess
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from curl_cffi import requests
@@ -59,23 +60,32 @@ def _fetch_profile_page(session: requests.Session, username: str) -> Optional[di
     return None
 
 
-def _fetch_video_list(session: requests.Session, sec_uid: str, count: int = 30) -> list[dict]:
-    """Fetch video list via TikTok API."""
-    url = 'https://www.tiktok.com/api/post/item_list/'
-    params = {
-        'aid': '1988',
-        'count': str(count),
-        'secUid': sec_uid,
-        'cursor': '0',
-    }
+def _fetch_videos_ytdlp(username: str, count: int = 30) -> list[dict]:
+    """Fetch video list via yt-dlp (handles TikTok's anti-bot signing)."""
     try:
-        resp = session.get(url, params=params, timeout=15)
-        if resp.status_code == 200:
-            data = resp.json()
-            return data.get('itemList', [])
+        result = subprocess.run(
+            ['yt-dlp', '--flat-playlist', '--dump-json',
+             '--playlist-items', f'1:{count}',
+             f'https://www.tiktok.com/@{username}'],
+            capture_output=True, text=True, timeout=90,
+        )
+        if result.returncode != 0:
+            print(f"  [!] yt-dlp failed: {result.stderr.strip()[:200]}")
+            return []
+        items = []
+        for line in result.stdout.strip().split('\n'):
+            if line:
+                items.append(json.loads(line))
+        return items
+    except FileNotFoundError:
+        print("  [!] yt-dlp not installed — cannot fetch videos")
+        return []
+    except subprocess.TimeoutExpired:
+        print("  [!] yt-dlp timed out")
+        return []
     except Exception as e:
-        print(f"  [!] Video list API failed: {e}")
-    return []
+        print(f"  [!] yt-dlp error: {e}")
+        return []
 
 
 def scrape_profile(username: str) -> dict:
@@ -99,13 +109,12 @@ def scrape_profile(username: str) -> dict:
     
     # Parse videos from page data
     videos = _parse_video_data(page_data, username, profile_data.get('avg_views', 1))
-    
-    # Try API for more videos if we got a secUid
-    if profile_data.get('sec_uid') and len(videos) < 10:
-        api_videos = _fetch_video_list(session, profile_data['sec_uid'])
-        if api_videos:
-            avg_views = profile_data.get('avg_views', 1)
-            videos = _parse_raw_items(api_videos, avg_views)
+
+    # Use yt-dlp for videos (the TikTok API requires signing we can't generate)
+    if len(videos) < 10:
+        ytdlp_items = _fetch_videos_ytdlp(username)
+        if ytdlp_items:
+            videos = _parse_ytdlp_items(ytdlp_items, username)
     
     duration_ms = int((time.time() - start_time) * 1000)
     
@@ -119,7 +128,7 @@ def scrape_profile(username: str) -> dict:
         total_likes=profile_data.get('total_likes', 0),
         post_count=profile_data.get('post_count', 0),
         avg_views=profile_data.get('avg_views', 0),
-        last_scraped_at=datetime.utcnow().isoformat()
+        last_scraped_at=datetime.now(timezone.utc).isoformat()
     )
     
     if videos:
@@ -209,16 +218,16 @@ def _parse_video_data(page_data: dict, username: str, avg_views: float) -> list[
         if items:
             raw_items = list(items.values())
     
-    return _parse_raw_items(raw_items, avg_views)
+    return _parse_raw_items(raw_items, avg_views, username)
 
 
-def _parse_raw_items(raw_items: list[dict], avg_views: float) -> list[dict]:
+def _parse_raw_items(raw_items: list[dict], avg_views: float, username: str = '') -> list[dict]:
     """Parse raw TikTok video items into our format."""
     videos = []
-    
+
     if not raw_items:
         return videos
-    
+
     # Recalculate avg_views from actual data
     view_counts = [
         item.get('stats', {}).get('playCount', item.get('playCount', 0))
@@ -228,14 +237,26 @@ def _parse_raw_items(raw_items: list[dict], avg_views: float) -> list[dict]:
         actual_avg = sum(view_counts) / len(view_counts)
         if actual_avg > 0:
             avg_views = actual_avg
-    
+
     avg_views = max(avg_views, 1)
-    
+
+    # Calculate engagement-based viral score (consistent with Instagram)
+    engagements = []
     for item in raw_items:
         stats = item.get('stats', {})
+        eng = (stats.get('diggCount', item.get('diggCount', 0))
+               + stats.get('commentCount', item.get('commentCount', 0)))
+        engagements.append(eng)
+    avg_eng = sum(engagements) / len(engagements) if engagements else 1
+
+    for idx, item in enumerate(raw_items):
+        stats = item.get('stats', {})
         view_count = stats.get('playCount', item.get('playCount', 0))
-        viral = round(view_count / avg_views, 1) if avg_views > 0 else 0
-        
+
+        # Engagement-based viral score (likes + comments) / avg engagement
+        eng = engagements[idx] if idx < len(engagements) else 0
+        viral = round(eng / avg_eng, 2) if avg_eng > 0 else 1.0
+
         video_data = item.get('video', {})
         create_time = item.get('createTime', 0)
         posted_at = None
@@ -244,10 +265,13 @@ def _parse_raw_items(raw_items: list[dict], avg_views: float) -> list[dict]:
                 posted_at = datetime.fromtimestamp(int(create_time)).isoformat()
             except Exception:
                 pass
-        
+
+        # Use author username from item if available, fall back to passed username
+        author = item.get('author', {}).get('uniqueId', username) or username
+
         videos.append({
             'platform_id': str(item.get('id', '')),
-            'post_url': f"https://www.tiktok.com/@/video/{item.get('id', '')}",
+            'post_url': f"https://www.tiktok.com/@{author}/video/{item.get('id', '')}",
             'thumbnail_url': video_data.get('cover', video_data.get('dynamicCover', '')),
             'description': item.get('desc', ''),
             'views': view_count,
@@ -258,8 +282,66 @@ def _parse_raw_items(raw_items: list[dict], avg_views: float) -> list[dict]:
             'viral_score': viral,
             'posted_at': posted_at,
         })
-    
+
     return videos
+
+
+def _parse_ytdlp_items(items: list[dict], username: str) -> list[dict]:
+    """Parse yt-dlp flat-playlist JSON items into our video format."""
+    if not items:
+        return []
+
+    # Calculate avg engagement for viral score
+    engagements = [item.get('like_count', 0) + item.get('comment_count', 0) for item in items]
+    avg_eng = sum(engagements) / len(engagements) if engagements else 1
+    avg_eng = max(avg_eng, 1)
+
+    videos = []
+    for idx, item in enumerate(items):
+        eng = engagements[idx] if idx < len(engagements) else 0
+        viral = round(eng / avg_eng, 2) if avg_eng > 0 else 1.0
+
+        posted_at = None
+        ts = item.get('timestamp')
+        if ts:
+            try:
+                posted_at = datetime.fromtimestamp(int(ts), tz=timezone.utc).isoformat()
+            except Exception:
+                pass
+
+        # Pick best thumbnail
+        thumb = ''
+        for t in item.get('thumbnails', []):
+            if t.get('id') == 'cover':
+                thumb = t.get('url', '')
+                break
+        if not thumb and item.get('thumbnails'):
+            thumb = item['thumbnails'][0].get('url', '')
+
+        author = item.get('uploader', username) or username
+
+        videos.append({
+            'platform_id': str(item.get('id', '')),
+            'post_url': f"https://www.tiktok.com/@{author}/video/{item.get('id', '')}",
+            'thumbnail_url': thumb,
+            'description': item.get('description', item.get('title', '')),
+            'views': item.get('view_count', 0),
+            'likes': item.get('like_count', 0),
+            'comments': item.get('comment_count', 0),
+            'shares': item.get('repost_count', 0),
+            'duration_seconds': item.get('duration', 0),
+            'viral_score': viral,
+            'posted_at': posted_at,
+        })
+
+    return videos
+
+
+def scrape_and_store(username: str, headless: bool = True) -> bool:
+    """Scrape a TikTok profile and store in the database. Used by daemon."""
+    username = username.lstrip('@')
+    result = scrape_profile(username)
+    return bool(result.get('videos'))
 
 
 if __name__ == '__main__':
