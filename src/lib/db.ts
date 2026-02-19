@@ -92,6 +92,15 @@ async function initSchema() {
       notes TEXT,
       saved_at TIMESTAMPTZ DEFAULT NOW()
     );
+
+    CREATE TABLE IF NOT EXISTS scrape_queue (
+      id SERIAL PRIMARY KEY,
+      profile_id INTEGER REFERENCES profiles(id),
+      status TEXT DEFAULT 'pending',
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      started_at TIMESTAMPTZ,
+      completed_at TIMESTAMPTZ
+    );
   `);
   // Migrate hook columns for existing databases
   await pool.query(`

@@ -46,6 +46,15 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Enqueue for immediate scraping by the daemon (skip if already pending/in_progress)
+    await pool.query(
+      `INSERT INTO scrape_queue (profile_id)
+       SELECT $1 WHERE NOT EXISTS (
+         SELECT 1 FROM scrape_queue WHERE profile_id = $1 AND status IN ('pending', 'in_progress')
+       )`,
+      [profile.id]
+    );
+
     return NextResponse.json({ success: true, profile });
   } catch {
     return NextResponse.json({ error: 'Failed to track profile' }, { status: 500 });

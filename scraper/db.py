@@ -77,6 +77,15 @@ CREATE TABLE IF NOT EXISTS saved_posts (
   notes TEXT,
   saved_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+CREATE TABLE IF NOT EXISTS scrape_queue (
+  id SERIAL PRIMARY KEY,
+  profile_id INTEGER REFERENCES profiles(id),
+  status TEXT DEFAULT 'pending',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  started_at TIMESTAMPTZ,
+  completed_at TIMESTAMPTZ
+);
 """
 
 
@@ -267,6 +276,50 @@ def save_hook_analysis(post_id: int, transcript: str, hook_analysis_dict: dict):
         UPDATE posts SET transcript = %s, hook_analysis = %s, analyzed_at = NOW()
         WHERE id = %s
     """, (transcript, json.dumps(hook_analysis_dict), post_id))
+    conn.commit()
+    cur.close()
+    conn.close()
+
+
+def pop_scrape_queue() -> Optional[tuple]:
+    """Atomically claim the next pending queue entry.
+    Returns (queue_id, username, platform) or None.
+    """
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute("""
+        UPDATE scrape_queue SET status='in_progress', started_at=NOW()
+        WHERE id = (
+            SELECT id FROM scrape_queue WHERE status='pending' ORDER BY id LIMIT 1
+        )
+        RETURNING id, profile_id
+    """)
+    row = cur.fetchone()
+    if not row:
+        conn.commit()
+        cur.close()
+        conn.close()
+        return None
+    queue_id = row['id']
+    profile_id = row['profile_id']
+    cur.execute("SELECT username, platform FROM profiles WHERE id=%s", (profile_id,))
+    profile = cur.fetchone()
+    conn.commit()
+    cur.close()
+    conn.close()
+    if not profile:
+        return None
+    return (queue_id, profile['username'], profile['platform'])
+
+
+def complete_scrape_queue(queue_id: int, status: str = 'done'):
+    """Mark a queue entry as done or error."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE scrape_queue SET status=%s, completed_at=NOW() WHERE id=%s",
+        (status, queue_id)
+    )
     conn.commit()
     cur.close()
     conn.close()
