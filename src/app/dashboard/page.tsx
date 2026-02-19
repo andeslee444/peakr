@@ -20,7 +20,7 @@ export default function DashboardPage() {
   const [analyzingId, setAnalyzingId] = useState<number | null>(null);
 
   // Autocomplete state
-  const [searchResults, setSearchResults] = useState<{ username: string; display_name: string; avatar_url: string; followers: number; verified: boolean; is_tracked: boolean }[]>([]);
+  const [searchResults, setSearchResults] = useState<{ username: string; display_name: string; avatar_url: string; followers: number; post_count: number; verified: boolean; is_tracked: boolean }[]>([]);
   const [showDropdown, setShowDropdown] = useState(false);
   const [searchLoading, setSearchLoading] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -99,12 +99,22 @@ export default function DashboardPage() {
     const clean = trackUsername.replace(/^@/, '').trim();
     if (!clean) return;
 
+    // Try to find metadata from search results
+    const match = searchResults.find(r => r.username.toLowerCase() === clean.toLowerCase());
+
     setTrackStatus({ type: 'loading' });
     try {
       const res = await fetch('/api/track', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: clean, platform: trackPlatform }),
+        body: JSON.stringify({
+          username: clean,
+          platform: trackPlatform,
+          display_name: match?.display_name,
+          avatar_url: match?.avatar_url,
+          followers: match?.followers,
+          post_count: match?.post_count,
+        }),
       });
       const data = await res.json();
 
@@ -265,7 +275,14 @@ export default function DashboardPage() {
                           fetch('/api/track', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ username: clean, platform: trackPlatform }),
+                            body: JSON.stringify({
+                              username: clean,
+                              platform: trackPlatform,
+                              display_name: result.display_name,
+                              avatar_url: result.avatar_url,
+                              followers: result.followers,
+                              post_count: result.post_count,
+                            }),
                           })
                             .then((res) => res.json())
                             .then((data) => {
@@ -382,7 +399,11 @@ export default function DashboardPage() {
                       <span className="text-xs">{account.platform === 'instagram' ? '📸' : '🎵'}</span>
                       <p className="font-medium text-gray-900 text-sm">@{account.username}</p>
                     </div>
-                    <p className="text-xs text-gray-500">{account.post_count_actual} posts • {formatNumber(Math.round(account.avg_views_calc || 0))} avg</p>
+                    <p className="text-xs text-gray-500">
+                      {(account.post_count_actual ?? 0) > 0 ? `${account.post_count_actual} posts` : (account.followers ?? 0) > 0 ? `${formatNumber(account.followers)} followers` : '0 posts'}
+                      {' • '}
+                      {formatNumber(Math.round(account.avg_views_calc || 0))} avg
+                    </p>
                   </div>
                 </div>
               </div>

@@ -6,6 +6,7 @@ interface SearchResult {
   display_name: string;
   avatar_url: string;
   followers: number;
+  post_count: number;
   verified: boolean;
   is_tracked: boolean;
 }
@@ -41,6 +42,7 @@ async function lookupInstagramUser(query: string): Promise<SearchResult[]> {
         display_name: user.full_name || user.username,
         avatar_url: user.profile_pic_url_hd || user.profile_pic_url || '',
         followers: user.edge_followed_by?.count ?? 0,
+        post_count: user.edge_owner_to_timeline_media?.count ?? 0,
         verified: user.is_verified ?? false,
         is_tracked: false,
       },
@@ -67,7 +69,7 @@ async function lookupTikTokUser(query: string): Promise<SearchResult[]> {
 
     const html = await resp.text();
     const match = html.match(
-      /<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>(.*?)<\/script>/s
+      new RegExp('<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>(.*?)</script>', 's')
     );
     if (!match) return [];
 
@@ -86,6 +88,7 @@ async function lookupTikTokUser(query: string): Promise<SearchResult[]> {
         display_name: user.nickname ?? '',
         avatar_url: user.avatarThumb ?? user.avatarMedium ?? '',
         followers: stats.followerCount ?? 0,
+        post_count: stats.videoCount ?? 0,
         verified: user.verified ?? false,
         is_tracked: false,
       },
@@ -113,7 +116,7 @@ export async function GET(req: NextRequest) {
       platform === 'tiktok' ? lookupTikTokUser(q) : lookupInstagramUser(q),
       getPool()
         .query(
-          `SELECT username, display_name, avatar_url, followers
+          `SELECT username, display_name, avatar_url, followers, post_count
            FROM profiles
            WHERE platform = $1 AND username ILIKE $2
            ORDER BY followers DESC NULLS LAST
@@ -135,6 +138,7 @@ export async function GET(req: NextRequest) {
         display_name: (r.display_name as string) || '',
         avatar_url: (r.avatar_url as string) || '',
         followers: (r.followers as number) || 0,
+        post_count: (r.post_count as number) || 0,
         verified: false,
         is_tracked: true,
       })
@@ -148,11 +152,10 @@ export async function GET(req: NextRequest) {
         const existing = merged.find(
           (m) => m.username.toLowerCase() === ext.username.toLowerCase()
         );
-        if (existing && !existing.avatar_url && ext.avatar_url) {
-          existing.avatar_url = ext.avatar_url;
-        }
-        if (existing && ext.followers > existing.followers) {
-          existing.followers = ext.followers;
+        if (existing) {
+          if (!existing.avatar_url && ext.avatar_url) existing.avatar_url = ext.avatar_url;
+          if (ext.followers > existing.followers) existing.followers = ext.followers;
+          if (ext.post_count > existing.post_count) existing.post_count = ext.post_count;
         }
       }
     }

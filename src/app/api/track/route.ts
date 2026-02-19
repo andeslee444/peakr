@@ -5,7 +5,7 @@ const USERNAME_RE = /^[a-zA-Z0-9_.]{1,30}$/;
 
 export async function POST(req: NextRequest) {
   try {
-    const { username, platform = 'tiktok' } = await req.json();
+    const { username, platform = 'tiktok', display_name, avatar_url, followers, post_count } = await req.json();
     if (!username) {
       return NextResponse.json({ error: 'username required' }, { status: 400 });
     }
@@ -20,11 +20,17 @@ export async function POST(req: NextRequest) {
 
     const pool = getPool();
 
-    // Insert the profile (or do nothing if it already exists).
+    // Insert the profile with metadata from search, or update empty fields if it already exists.
     // The daemon on Mac Mini will pick up profiles with last_scraped_at IS NULL.
     await pool.query(
-      `INSERT INTO profiles (username, platform) VALUES ($1, $2) ON CONFLICT (username, platform) DO NOTHING`,
-      [clean, platform]
+      `INSERT INTO profiles (username, platform, display_name, avatar_url, followers, post_count)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (username, platform) DO UPDATE SET
+         display_name = COALESCE(NULLIF(profiles.display_name, ''), EXCLUDED.display_name),
+         avatar_url = COALESCE(NULLIF(profiles.avatar_url, ''), EXCLUDED.avatar_url),
+         followers = GREATEST(profiles.followers, EXCLUDED.followers),
+         post_count = GREATEST(profiles.post_count, EXCLUDED.post_count)`,
+      [clean, platform, display_name || null, avatar_url || null, followers || 0, post_count || 0]
     );
 
     // Read back from DB

@@ -8,7 +8,9 @@ export async function GET(request: Request) {
 
     const pool = getPool();
     let query = `
-      SELECT pr.*, COUNT(p.id) as post_count_actual, AVG(p.views) as avg_views_calc
+      SELECT pr.*,
+        CASE WHEN COUNT(p.id) > 0 THEN COUNT(p.id) ELSE pr.post_count END as post_count_actual,
+        CASE WHEN COUNT(p.id) > 0 THEN AVG(p.views) ELSE pr.avg_views END as avg_views_calc
       FROM profiles pr
       LEFT JOIN posts p ON p.profile_id = pr.id
     `;
