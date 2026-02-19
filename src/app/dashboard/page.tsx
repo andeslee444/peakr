@@ -1,9 +1,10 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import Image from 'next/image';
-import { formatNumber, formatViralScore } from '@/lib/format';
+import { formatNumber, formatViralScore, proxyImg } from '@/lib/format';
 import type { Profile, Post } from '@/lib/types';
+import { HookOverlay, HookTextExcerpt } from '@/components/HookBadge';
 
 export default function DashboardPage() {
   const [profiles, setProfiles] = useState<Profile[]>([]);
@@ -16,6 +17,62 @@ export default function DashboardPage() {
   const [trackPlatform, setTrackPlatform] = useState<'instagram' | 'tiktok'>('instagram');
   const [trackStatus, setTrackStatus] = useState<{ type: 'idle' | 'loading' | 'success' | 'error'; message?: string }>({ type: 'idle' });
   const [savingId, setSavingId] = useState<number | null>(null);
+  const [analyzingId, setAnalyzingId] = useState<number | null>(null);
+
+  // Autocomplete state
+  const [searchResults, setSearchResults] = useState<{ username: string; display_name: string; avatar_url: string; followers: number; verified: boolean; is_tracked: boolean }[]>([]);
+  const [showDropdown, setShowDropdown] = useState(false);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Close dropdown on click outside or Escape
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node) &&
+          inputRef.current && !inputRef.current.contains(e.target as Node)) {
+        setShowDropdown(false);
+      }
+    };
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setShowDropdown(false);
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('keydown', handleEscape);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleEscape);
+    };
+  }, []);
+
+  const searchAccounts = useCallback((query: string, platform: string) => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+
+    if (query.replace(/^@/, '').trim().length < 2) {
+      setSearchResults([]);
+      setShowDropdown(false);
+      return;
+    }
+
+    setSearchLoading(true);
+    setShowDropdown(true);
+
+    debounceRef.current = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/search-accounts?q=${encodeURIComponent(query.replace(/^@/, '').trim())}&platform=${platform}`);
+        const data = await res.json();
+        const results = data.results || [];
+        setSearchResults(results);
+        if (results.length === 0) setShowDropdown(false);
+      } catch {
+        setSearchResults([]);
+        setShowDropdown(false);
+      } finally {
+        setSearchLoading(false);
+      }
+    }, 300);
+  }, []);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -85,6 +142,27 @@ export default function DashboardPage() {
     }
   };
 
+  const analyzeHook = async (postId: number) => {
+    setAnalyzingId(postId);
+    try {
+      const res = await fetch('/api/analyze-hook', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ post_id: postId }),
+      });
+      const data = await res.json();
+      if (data.status === 'already_analyzed') {
+        // Update the post in state with the analysis
+        setPosts(prev => prev.map(p =>
+          p.id === postId ? { ...p, hook_analysis: data.hook_analysis, analyzed_at: data.analyzed_at, transcript: data.transcript } : p
+        ));
+      }
+      // For 'queued' status, the analysis happens async on the daemon
+    } finally {
+      setAnalyzingId(null);
+    }
+  };
+
   const filteredPosts = posts.filter(p => {
     if (!searchQuery) return true;
     const q = searchQuery.toLowerCase();
@@ -146,18 +224,100 @@ export default function DashboardPage() {
 
         {/* Inline track form */}
         <div className="flex flex-col sm:flex-row gap-2 mb-4">
-          <input
-            type="text"
-            placeholder="Enter username..."
-            value={trackUsername}
-            onChange={(e) => setTrackUsername(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter' && trackStatus.type !== 'loading') trackUser(); }}
-            disabled={trackStatus.type === 'loading'}
-            className="flex-1 px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent disabled:opacity-50"
-          />
+          <div className="flex-1 relative">
+            <input
+              ref={inputRef}
+              type="text"
+              placeholder="Enter username..."
+              value={trackUsername}
+              onChange={(e) => {
+                setTrackUsername(e.target.value);
+                searchAccounts(e.target.value, trackPlatform);
+              }}
+              onFocus={() => { if (searchResults.length > 0) setShowDropdown(true); }}
+              onKeyDown={(e) => { if (e.key === 'Enter' && trackStatus.type !== 'loading') { setShowDropdown(false); trackUser(); } }}
+              disabled={trackStatus.type === 'loading'}
+              className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent disabled:opacity-50"
+            />
+
+            {/* Autocomplete dropdown */}
+            {showDropdown && (
+              <div ref={dropdownRef} className="absolute z-50 top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-72 overflow-y-auto">
+                {searchLoading && searchResults.length === 0 ? (
+                  <div className="flex items-center justify-center py-4 text-gray-400 text-sm">
+                    <span className="animate-spin inline-block w-4 h-4 border-2 border-indigo-400 border-t-transparent rounded-full mr-2" />
+                    Searching...
+                  </div>
+                ) : (
+                  searchResults.map((result) => (
+                    <button
+                      key={result.username}
+                      type="button"
+                      className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-indigo-50 transition-colors text-left"
+                      onClick={() => {
+                        setTrackUsername(result.username);
+                        setShowDropdown(false);
+                        // Auto-track after selection
+                        setTimeout(() => {
+                          const clean = result.username.replace(/^@/, '').trim();
+                          if (!clean) return;
+                          setTrackStatus({ type: 'loading' });
+                          fetch('/api/track', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ username: clean, platform: trackPlatform }),
+                          })
+                            .then((res) => res.json())
+                            .then((data) => {
+                              if (data.success) {
+                                setTrackStatus({ type: 'success', message: `Successfully tracking @${clean}!` });
+                                setTrackUsername('');
+                                fetchData();
+                              } else {
+                                setTrackStatus({ type: 'error', message: data.error || 'Failed to track profile' });
+                              }
+                            })
+                            .catch(() => setTrackStatus({ type: 'error', message: 'Network error. Please try again.' }))
+                            .finally(() => setTimeout(() => setTrackStatus({ type: 'idle' }), 3000));
+                        }, 0);
+                      }}
+                    >
+                      <div className="relative w-9 h-9 rounded-full bg-gradient-to-br from-purple-400 to-pink-500 flex-shrink-0 overflow-hidden flex items-center justify-center text-sm">
+                        {result.avatar_url ? (
+                          <Image src={proxyImg(result.avatar_url)!} alt="" fill className="object-cover" unoptimized />
+                        ) : (
+                          <span className="text-white">👤</span>
+                        )}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-1">
+                          <span className="font-medium text-gray-900 text-sm truncate">@{result.username}</span>
+                          {result.verified && (
+                            <svg className="w-4 h-4 text-blue-500 flex-shrink-0" viewBox="0 0 24 24" fill="currentColor">
+                              <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z" />
+                            </svg>
+                          )}
+                          {result.is_tracked && (
+                            <span className="text-xs bg-indigo-100 text-indigo-700 px-1.5 py-0.5 rounded-full flex-shrink-0">Tracked</span>
+                          )}
+                        </div>
+                        <p className="text-xs text-gray-500 truncate">
+                          {result.display_name}{result.followers > 0 ? ` · ${formatNumber(result.followers)} followers` : ''}
+                        </p>
+                      </div>
+                    </button>
+                  ))
+                )}
+              </div>
+            )}
+          </div>
           <select
             value={trackPlatform}
-            onChange={(e) => setTrackPlatform(e.target.value as 'instagram' | 'tiktok')}
+            onChange={(e) => {
+              const p = e.target.value as 'instagram' | 'tiktok';
+              setTrackPlatform(p);
+              if (trackUsername.trim().length >= 2) searchAccounts(trackUsername, p);
+            }}
             disabled={trackStatus.type === 'loading'}
             className="px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white disabled:opacity-50"
           >
@@ -212,7 +372,7 @@ export default function DashboardPage() {
                 <div className="flex items-center space-x-3">
                   <div className="relative w-12 h-12 rounded-full bg-gradient-to-br from-purple-400 to-pink-500 flex items-center justify-center text-2xl overflow-hidden">
                     {account.avatar_url ? (
-                      <Image src={account.avatar_url} alt="" fill className="object-cover" unoptimized />
+                      <Image src={proxyImg(account.avatar_url)!} alt="" fill className="object-cover" unoptimized />
                     ) : (
                       '👤'
                     )}
@@ -254,7 +414,7 @@ export default function DashboardPage() {
               >
                 <div className="relative aspect-[9/16] bg-gradient-to-br from-purple-400 to-pink-500 flex items-center justify-center overflow-hidden">
                   {item.thumbnail_url ? (
-                    <Image src={item.thumbnail_url} alt="" fill className="object-cover" unoptimized />
+                    <Image src={proxyImg(item.thumbnail_url)!} alt="" fill className="object-cover" unoptimized />
                   ) : (
                     <span className="text-6xl">{item.platform === 'instagram' ? '📸' : '🎵'}</span>
                   )}
@@ -269,22 +429,44 @@ export default function DashboardPage() {
                     <span>{formatNumber(item.views)}</span>
                   </div>
 
-                  <button
-                    onClick={(e) => { e.stopPropagation(); savePost(item.id); }}
-                    disabled={savingId === item.id}
-                    className="absolute bottom-3 right-3 bg-white/90 hover:bg-white p-2 rounded-full transition-colors"
-                  >
-                    <svg className="w-5 h-5 text-gray-700" fill={savingId === item.id ? 'currentColor' : 'none'} stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
-                    </svg>
-                  </button>
+                  {item.hook_analysis && item.analyzed_at && (
+                    <HookOverlay analysis={item.hook_analysis} />
+                  )}
+
+                  <div className="absolute bottom-3 right-3 flex items-center gap-1.5">
+                    {!item.analyzed_at && (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); analyzeHook(item.id); }}
+                        disabled={analyzingId === item.id}
+                        className="bg-white/90 hover:bg-white p-2 rounded-full transition-colors"
+                        title="Analyze hook with AI"
+                      >
+                        {analyzingId === item.id ? (
+                          <span className="block w-5 h-5 animate-spin border-2 border-indigo-500 border-t-transparent rounded-full" />
+                        ) : (
+                          <svg className="w-5 h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                          </svg>
+                        )}
+                      </button>
+                    )}
+                    <button
+                      onClick={(e) => { e.stopPropagation(); savePost(item.id); }}
+                      disabled={savingId === item.id}
+                      className="bg-white/90 hover:bg-white p-2 rounded-full transition-colors"
+                    >
+                      <svg className="w-5 h-5 text-gray-700" fill={savingId === item.id ? 'currentColor' : 'none'} stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
+                      </svg>
+                    </button>
+                  </div>
                 </div>
 
                 <div className="p-4">
                   <div className="flex items-center space-x-2">
                     <div className="relative w-8 h-8 rounded-full bg-gradient-to-br from-purple-400 to-pink-500 flex items-center justify-center text-sm overflow-hidden">
                       {item.avatar_url ? (
-                        <Image src={item.avatar_url} alt="" fill className="object-cover" unoptimized />
+                        <Image src={proxyImg(item.avatar_url)!} alt="" fill className="object-cover" unoptimized />
                       ) : (
                         '👤'
                       )}
@@ -303,6 +485,10 @@ export default function DashboardPage() {
                     <span className="flex items-center space-x-1"><span>💬</span><span>{formatNumber(item.comments)}</span></span>
                     <span className="flex items-center space-x-1"><span>↗️</span><span>{formatNumber(item.shares)}</span></span>
                   </div>
+
+                  {item.hook_analysis && item.analyzed_at && (
+                    <HookTextExcerpt analysis={item.hook_analysis} />
+                  )}
                 </div>
               </div>
             ))}

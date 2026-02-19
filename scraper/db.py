@@ -54,6 +54,9 @@ CREATE TABLE IF NOT EXISTS posts (
   viral_score REAL DEFAULT 0,
   posted_at TIMESTAMPTZ,
   scraped_at TIMESTAMPTZ DEFAULT NOW(),
+  transcript TEXT,
+  hook_analysis JSONB,
+  analyzed_at TIMESTAMPTZ,
   UNIQUE(profile_id, platform_id)
 );
 
@@ -155,18 +158,19 @@ def add_posts(profile_id: int, posts: list[dict]):
     for p in posts:
         cur.execute("""
             INSERT INTO posts (profile_id, platform_id, post_url, thumbnail_url, description,
-                              views, likes, comments, shares, duration_seconds, viral_score, posted_at, scraped_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                              views, likes, comments, shares, duration_seconds, is_video, viral_score, posted_at, scraped_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT(profile_id, platform_id) DO UPDATE SET
                 views=EXCLUDED.views, likes=EXCLUDED.likes, comments=EXCLUDED.comments,
                 shares=EXCLUDED.shares, viral_score=EXCLUDED.viral_score, scraped_at=EXCLUDED.scraped_at,
-                thumbnail_url=EXCLUDED.thumbnail_url, description=EXCLUDED.description
+                thumbnail_url=EXCLUDED.thumbnail_url, description=EXCLUDED.description,
+                is_video=EXCLUDED.is_video
         """, (
             profile_id, p.get('platform_id', ''), p.get('post_url', ''),
             p.get('thumbnail_url', ''), p.get('description', ''),
             p.get('views', 0), p.get('likes', 0), p.get('comments', 0),
-            p.get('shares', 0), p.get('duration_seconds', 0), p.get('viral_score', 0),
-            p.get('posted_at'), datetime.utcnow().isoformat()
+            p.get('shares', 0), p.get('duration_seconds', 0), p.get('is_video', False),
+            p.get('viral_score', 0), p.get('posted_at'), datetime.utcnow().isoformat()
         ))
     conn.commit()
     cur.close()
@@ -215,5 +219,59 @@ def log_scrape(profile_id: int, status: str, posts_found: int = 0,
     conn.close()
 
 
+def migrate_hook_columns():
+    """Add hook analysis columns to existing posts table."""
+    conn = get_conn()
+    cur = conn.cursor()
+    for col, typ in [('transcript', 'TEXT'), ('hook_analysis', 'JSONB'), ('analyzed_at', 'TIMESTAMPTZ')]:
+        cur.execute(f"ALTER TABLE posts ADD COLUMN IF NOT EXISTS {col} {typ}")
+    conn.commit()
+    cur.close()
+    conn.close()
+
+
+def get_unanalyzed_viral_posts(threshold: float = 1.5, limit: int = 10) -> list[dict]:
+    """Get viral posts that haven't been analyzed yet.
+    Also picks up manually-queued posts (hook_analysis = '{"status": "pending"}').
+    """
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    # Manually queued posts get priority
+    cur.execute("""
+        (SELECT p.*, pr.username, pr.platform, 1 as priority
+         FROM posts p JOIN profiles pr ON p.profile_id = pr.id
+         WHERE p.analyzed_at IS NULL AND p.hook_analysis = '{"status": "pending"}'
+         ORDER BY p.id DESC LIMIT %s)
+        UNION ALL
+        (SELECT p.*, pr.username, pr.platform, 2 as priority
+         FROM posts p JOIN profiles pr ON p.profile_id = pr.id
+         WHERE p.viral_score >= %s AND p.analyzed_at IS NULL
+               AND (p.hook_analysis IS NULL OR p.hook_analysis != '{"status": "pending"}')
+               AND p.is_video = TRUE
+         ORDER BY p.viral_score DESC LIMIT %s)
+        ORDER BY priority, viral_score DESC
+        LIMIT %s
+    """, (limit, threshold, limit, limit))
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def save_hook_analysis(post_id: int, transcript: str, hook_analysis_dict: dict):
+    """Save hook analysis results to a post."""
+    import json
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        UPDATE posts SET transcript = %s, hook_analysis = %s, analyzed_at = NOW()
+        WHERE id = %s
+    """, (transcript, json.dumps(hook_analysis_dict), post_id))
+    conn.commit()
+    cur.close()
+    conn.close()
+
+
 # Initialize on import
 init_db()
+migrate_hook_columns()

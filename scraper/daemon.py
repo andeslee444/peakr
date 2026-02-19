@@ -101,6 +101,15 @@ def run_daemon():
                 log.info(f"Rate limit: sleeping {delay:.0f}s")
                 time.sleep(delay)
 
+            # Hook analysis pass (after all scraping is done)
+            try:
+                from scraper.analyze import run_analysis_pass
+                analyzed = run_analysis_pass(max_count=5)
+                if analyzed:
+                    log.info(f"Hook analysis: {analyzed} posts analyzed")
+            except Exception as e:
+                log.error(f"Hook analysis error: {e}")
+
             time.sleep(60)
     finally:
         PID_FILE.unlink(missing_ok=True)

@@ -1,3 +1,11 @@
+export interface HookAnalysis {
+  hook_type: string;
+  hook_text: string;
+  hook_visual: string;
+  hook_explanation: string;
+  hook_score: number;
+}
+
 export interface Profile {
   id: number;
   username: string;
@@ -36,6 +44,9 @@ export interface Post {
   posted_at: string | null;
   duration_seconds: number | null;
   is_video: boolean;
+  transcript: string | null;
+  hook_analysis: HookAnalysis | null;
+  analyzed_at: string | null;
 }
 
 export interface SavedPost {
@@ -56,4 +67,7 @@ export interface SavedPost {
   post_url: string | null;
   description: string | null;
   posted_at: string | null;
+  transcript: string | null;
+  hook_analysis: HookAnalysis | null;
+  analyzed_at: string | null;
 }

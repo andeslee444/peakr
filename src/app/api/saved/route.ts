@@ -10,6 +10,7 @@ export async function GET(request: Request) {
     let query = `
       SELECT sp.*, p.views, p.likes, p.comments, p.shares, p.viral_score,
              p.thumbnail_url, p.post_url, p.description, p.posted_at,
+             p.transcript, p.hook_analysis, p.analyzed_at,
              pr.username, pr.platform, pr.avatar_url
       FROM saved_posts sp
       JOIN posts p ON sp.post_id = p.id

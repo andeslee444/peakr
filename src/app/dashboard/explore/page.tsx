@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import Image from 'next/image';
-import { formatNumber, formatViralScore } from '@/lib/format';
+import { formatNumber, formatViralScore, proxyImg } from '@/lib/format';
 import type { Post } from '@/lib/types';
 
 const platformEmoji: Record<string, string> = { instagram: '📸', tiktok: '🎵' };
@@ -130,7 +130,7 @@ export default function ExplorePage() {
               >
                 <div className="relative aspect-[9/16] bg-gradient-to-br from-purple-400 to-pink-500 flex items-center justify-center overflow-hidden">
                   {item.thumbnail_url ? (
-                    <Image src={item.thumbnail_url} alt="" fill className="object-cover" unoptimized />
+                    <Image src={proxyImg(item.thumbnail_url)!} alt="" fill className="object-cover" unoptimized />
                   ) : (
                     <span className="text-6xl">{platformEmoji[item.platform] || '📱'}</span>
                   )}

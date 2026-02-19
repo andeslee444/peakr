@@ -69,6 +69,9 @@ async function initSchema() {
       viral_score REAL DEFAULT 0,
       posted_at TIMESTAMPTZ,
       scraped_at TIMESTAMPTZ DEFAULT NOW(),
+      transcript TEXT,
+      hook_analysis JSONB,
+      analyzed_at TIMESTAMPTZ,
       UNIQUE(profile_id, platform_id)
     );
 
@@ -89,6 +92,12 @@ async function initSchema() {
       notes TEXT,
       saved_at TIMESTAMPTZ DEFAULT NOW()
     );
+  `);
+  // Migrate hook columns for existing databases
+  await pool.query(`
+    ALTER TABLE posts ADD COLUMN IF NOT EXISTS transcript TEXT;
+    ALTER TABLE posts ADD COLUMN IF NOT EXISTS hook_analysis JSONB;
+    ALTER TABLE posts ADD COLUMN IF NOT EXISTS analyzed_at TIMESTAMPTZ;
   `);
   _schemaInitialized = true;
 }

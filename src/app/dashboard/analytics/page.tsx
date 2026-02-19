@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { formatNumber, formatViralScore } from '@/lib/format';
+import { HookTypeBadge } from '@/components/HookBadge';
 
 interface AccountStat {
   username: string;
@@ -26,6 +27,36 @@ interface TopPost {
   viral_score: number;
 }
 
+interface HookDistribution {
+  hook_type: string;
+  count: string;
+  avg_viral_score: string;
+  avg_hook_score: string;
+}
+
+interface TopHook {
+  id: number;
+  hook_type: string;
+  hook_score: number;
+  hook_text: string;
+  hook_explanation: string;
+  viral_score: number;
+  views: number;
+  post_url: string;
+  username: string;
+  platform: string;
+}
+
+interface HookData {
+  distribution: HookDistribution[];
+  topHooks: TopHook[];
+  stats: {
+    totalAnalyzed: number;
+    avgHookScore: number;
+    avgViralScore: number;
+  };
+}
+
 interface AnalyticsData {
   overview: {
     totalAccounts: number;
@@ -41,13 +72,19 @@ interface AnalyticsData {
 
 export default function AnalyticsPage() {
   const [data, setData] = useState<AnalyticsData | null>(null);
+  const [hookData, setHookData] = useState<HookData | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch('/api/analytics')
-      .then(r => r.json())
-      .then(setData)
-      .catch(() => setData(null))
+    Promise.all([
+      fetch('/api/analytics').then(r => r.json()),
+      fetch('/api/analytics/hooks').then(r => r.json()),
+    ])
+      .then(([analyticsData, hooksData]) => {
+        setData(analyticsData);
+        setHookData(hooksData);
+      })
+      .catch(() => { setData(null); setHookData(null); })
       .finally(() => setLoading(false));
   }, []);
 
@@ -182,6 +219,68 @@ export default function AnalyticsPage() {
           </div>
         )}
       </div>
+
+      {/* Hook Analysis Section */}
+      {hookData && hookData.stats.totalAnalyzed > 0 && (
+        <>
+          <div className="bg-white rounded-2xl p-6 card-shadow">
+            <h2 className="text-lg font-semibold text-gray-900 mb-2">Hook Analysis</h2>
+            <p className="text-sm text-gray-500 mb-4">{hookData.stats.totalAnalyzed} videos analyzed | Avg hook score: {hookData.stats.avgHookScore.toFixed(1)}/10</p>
+
+            {hookData.distribution.length > 0 && (
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                {hookData.distribution.map(d => (
+                  <div key={d.hook_type} className="bg-gray-50 rounded-xl p-3">
+                    <HookTypeBadge hookType={d.hook_type} />
+                    <p className="mt-2 text-2xl font-bold text-gray-900">{d.count}</p>
+                    <p className="text-xs text-gray-500">Avg viral: {formatViralScore(parseFloat(d.avg_viral_score))}</p>
+                    <p className="text-xs text-gray-500">Avg score: {parseFloat(d.avg_hook_score).toFixed(1)}/10</p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {hookData.topHooks.length > 0 && (
+            <div className="bg-white rounded-2xl p-6 card-shadow">
+              <h2 className="text-lg font-semibold text-gray-900 mb-4">Top Hooks</h2>
+              <div className="space-y-3">
+                {hookData.topHooks.map((hook, i) => (
+                  <div
+                    key={hook.id}
+                    onClick={() => hook.post_url && window.open(hook.post_url, '_blank')}
+                    className="flex items-start gap-4 p-4 bg-gray-50 rounded-xl hover:bg-gray-100 transition-colors cursor-pointer"
+                  >
+                    <span className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center font-bold text-white ${
+                      i === 0 ? 'bg-yellow-500' : i === 1 ? 'bg-gray-400' : i === 2 ? 'bg-amber-600' : 'bg-gray-300'
+                    }`}>{i + 1}</span>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-1">
+                        <HookTypeBadge hookType={hook.hook_type} />
+                        <span className="text-sm font-bold text-gray-900">{hook.hook_score}/10</span>
+                        <span className="text-xs text-gray-500">@{hook.username}</span>
+                      </div>
+                      {hook.hook_text && (
+                        <p className="text-sm text-gray-700 italic line-clamp-2">&ldquo;{hook.hook_text}&rdquo;</p>
+                      )}
+                      {hook.hook_explanation && (
+                        <p className="text-xs text-gray-500 mt-1 line-clamp-2">{hook.hook_explanation}</p>
+                      )}
+                    </div>
+                    <div className="text-right flex-shrink-0">
+                      <p className="font-semibold text-gray-900">{formatNumber(hook.views)}</p>
+                      <p className="text-xs text-gray-500">views</p>
+                      <div className="viral-badge text-white text-xs font-bold px-2 py-0.5 rounded-full mt-1">
+                        {formatViralScore(hook.viral_score)}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </>
+      )}
     </div>
   );
 }

@@ -2,8 +2,9 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import Image from 'next/image';
-import { formatNumber, formatViralScore } from '@/lib/format';
+import { formatNumber, formatViralScore, proxyImg } from '@/lib/format';
 import type { SavedPost } from '@/lib/types';
+import { HookOverlay, HookTextExcerpt } from '@/components/HookBadge';
 
 export default function SavedPage() {
   const [saved, setSaved] = useState<SavedPost[]>([]);
@@ -12,6 +13,11 @@ export default function SavedPage() {
   const [loading, setLoading] = useState(true);
   const [newFolder, setNewFolder] = useState('');
   const [showNewFolder, setShowNewFolder] = useState(false);
+  const [importUrl, setImportUrl] = useState('');
+  const [importFolder, setImportFolder] = useState('default');
+  const [importLoading, setImportLoading] = useState(false);
+  const [importMsg, setImportMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [analyzingId, setAnalyzingId] = useState<number | null>(null);
 
   const fetchSaved = useCallback(async () => {
     setLoading(true);
@@ -31,6 +37,40 @@ export default function SavedPage() {
 
   useEffect(() => { fetchSaved(); }, [fetchSaved]);
 
+  // Sync import folder dropdown with active folder tab
+  useEffect(() => {
+    if (selectedFolder !== 'All') setImportFolder(selectedFolder);
+  }, [selectedFolder]);
+
+  const importTikTokLink = async () => {
+    if (!importUrl.trim()) return;
+    setImportLoading(true);
+    setImportMsg(null);
+    try {
+      const res = await fetch('/api/saved/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: importUrl.trim(), folder: importFolder }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setImportMsg({ type: 'error', text: data.error || 'Failed to import' });
+        return;
+      }
+      if (data.already_saved) {
+        setImportMsg({ type: 'success', text: 'Already saved to this folder!' });
+      } else {
+        setImportMsg({ type: 'success', text: 'Saved successfully!' });
+      }
+      setImportUrl('');
+      fetchSaved();
+    } catch {
+      setImportMsg({ type: 'error', text: 'Network error — please try again' });
+    } finally {
+      setImportLoading(false);
+    }
+  };
+
   const removeSaved = async (id: number) => {
     try {
       const res = await fetch(`/api/saved/${id}`, { method: 'DELETE' });
@@ -39,6 +79,25 @@ export default function SavedPage() {
       }
     } catch {
       // Keep item in UI if delete failed
+    }
+  };
+
+  const analyzeHook = async (postId: number) => {
+    setAnalyzingId(postId);
+    try {
+      const res = await fetch('/api/analyze-hook', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ post_id: postId }),
+      });
+      const data = await res.json();
+      if (data.status === 'already_analyzed') {
+        setSaved(prev => prev.map(s =>
+          s.post_id === postId ? { ...s, hook_analysis: data.hook_analysis, analyzed_at: data.analyzed_at, transcript: data.transcript } : s
+        ));
+      }
+    } finally {
+      setAnalyzingId(null);
     }
   };
 
@@ -55,6 +114,45 @@ export default function SavedPage() {
           <span>+</span>
           <span>New Folder</span>
         </button>
+      </div>
+
+      <div className="bg-white rounded-2xl p-4 card-shadow">
+        <h3 className="text-sm font-semibold text-gray-700 mb-3">Save Video Link</h3>
+        <div className="flex flex-col sm:flex-row gap-2">
+          <input
+            value={importUrl}
+            onChange={e => { setImportUrl(e.target.value); setImportMsg(null); }}
+            onKeyDown={e => e.key === 'Enter' && !importLoading && importTikTokLink()}
+            placeholder="Paste TikTok or Instagram Reel URL..."
+            className="flex-1 px-4 py-2 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
+          />
+          <select
+            value={importFolder}
+            onChange={e => setImportFolder(e.target.value)}
+            className="px-3 py-2 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          >
+            <option value="default">default</option>
+            {folders.filter(f => f !== 'default').map(f => (
+              <option key={f} value={f}>{f}</option>
+            ))}
+          </select>
+          <button
+            onClick={importTikTokLink}
+            disabled={importLoading || !importUrl.trim()}
+            className="gradient-bg text-white px-5 py-2 rounded-xl font-medium hover:opacity-90 transition-opacity disabled:opacity-50 flex items-center justify-center space-x-2 text-sm whitespace-nowrap"
+          >
+            {importLoading ? (
+              <div className="animate-spin w-4 h-4 border-2 border-white border-t-transparent rounded-full" />
+            ) : (
+              <span>Save Link</span>
+            )}
+          </button>
+        </div>
+        {importMsg && (
+          <p className={`mt-2 text-sm ${importMsg.type === 'error' ? 'text-red-600' : 'text-green-600'}`}>
+            {importMsg.text}
+          </p>
+        )}
       </div>
 
       {showNewFolder && (
@@ -116,7 +214,7 @@ export default function SavedPage() {
             >
               <div className="relative aspect-[9/16] bg-gradient-to-br from-purple-400 to-pink-500 flex items-center justify-center overflow-hidden">
                 {item.thumbnail_url ? (
-                  <Image src={item.thumbnail_url} alt="" fill className="object-cover" unoptimized />
+                  <Image src={proxyImg(item.thumbnail_url)!} alt="" fill className="object-cover" unoptimized />
                 ) : (
                   <span className="text-6xl">{item.platform === 'instagram' ? '📸' : '🎵'}</span>
                 )}
@@ -131,14 +229,36 @@ export default function SavedPage() {
                   <span>{formatNumber(item.views)}</span>
                 </div>
 
-                <button
-                  onClick={(e) => { e.stopPropagation(); removeSaved(item.id); }}
-                  className="absolute bottom-3 right-3 bg-red-500 hover:bg-red-600 p-2 rounded-full transition-colors opacity-0 group-hover:opacity-100"
-                >
-                  <svg className="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 24 24">
-                    <path d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
-                  </svg>
-                </button>
+                {item.hook_analysis && item.analyzed_at && (
+                  <HookOverlay analysis={item.hook_analysis} />
+                )}
+
+                <div className="absolute bottom-3 right-3 flex items-center gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                  {!item.analyzed_at && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); analyzeHook(item.post_id); }}
+                      disabled={analyzingId === item.post_id}
+                      className="bg-white/90 hover:bg-white p-2 rounded-full transition-colors"
+                      title="Analyze hook with AI"
+                    >
+                      {analyzingId === item.post_id ? (
+                        <span className="block w-5 h-5 animate-spin border-2 border-indigo-500 border-t-transparent rounded-full" />
+                      ) : (
+                        <svg className="w-5 h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                        </svg>
+                      )}
+                    </button>
+                  )}
+                  <button
+                    onClick={(e) => { e.stopPropagation(); removeSaved(item.id); }}
+                    className="bg-red-500 hover:bg-red-600 p-2 rounded-full transition-colors"
+                  >
+                    <svg className="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 24 24">
+                      <path d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
+                    </svg>
+                  </button>
+                </div>
               </div>
 
               <div className="p-4">
@@ -152,6 +272,9 @@ export default function SavedPage() {
                 <div className="mt-2">
                   <span className="text-xs bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full">{item.folder}</span>
                 </div>
+                {item.hook_analysis && item.analyzed_at && (
+                  <HookTextExcerpt analysis={item.hook_analysis} />
+                )}
               </div>
             </div>
           ))}
