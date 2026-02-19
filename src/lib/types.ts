@@ -35,7 +35,7 @@ export interface Post {
   viral_score: number;
   posted_at: string | null;
   duration_seconds: number | null;
-  is_video: number;
+  is_video: boolean;
 }
 
 export interface SavedPost {

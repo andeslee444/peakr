@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { useSession } from 'next-auth/react';
 import { formatNumber } from '@/lib/format';
 
 interface Overview {
@@ -10,9 +11,11 @@ interface Overview {
 }
 
 export default function AccountPage() {
-  const [name, setName] = useState('Yuka Tsunashima');
-  const [email, setEmail] = useState('yuka@example.com');
+  const { data: session } = useSession();
   const [stats, setStats] = useState<Overview | null>(null);
+
+  const name = session?.user?.name || 'User';
+  const image = session?.user?.image;
 
   useEffect(() => {
     fetch('/api/analytics')
@@ -36,41 +39,21 @@ export default function AccountPage() {
         <h2 className="text-lg font-semibold text-gray-900 mb-4">Profile</h2>
 
         <div className="flex items-center space-x-4 mb-6">
-          <div className="w-20 h-20 rounded-full gradient-bg flex items-center justify-center text-white text-3xl font-bold">
-            {name.charAt(0).toUpperCase()}
-          </div>
+          {image ? (
+            <img
+              src={image}
+              alt={name}
+              className="w-20 h-20 rounded-full object-cover"
+            />
+          ) : (
+            <div className="w-20 h-20 rounded-full gradient-bg flex items-center justify-center text-white text-3xl font-bold">
+              {name.charAt(0).toUpperCase()}
+            </div>
+          )}
           <div>
             <p className="font-medium text-gray-900">{name}</p>
-            <p className="text-sm text-gray-500 mt-1">{email}</p>
+            <p className="text-sm text-gray-500 mt-1">Signed in via TikTok</p>
           </div>
-        </div>
-
-        <div className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Full name
-            </label>
-            <input
-              type="text"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Email address
-            </label>
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
-            />
-          </div>
-
-          <p className="text-xs text-gray-400">Account settings will be functional once authentication is implemented.</p>
         </div>
       </div>
 
@@ -101,48 +84,6 @@ export default function AccountPage() {
               />
             </div>
           </div>
-        </div>
-      </div>
-
-      {/* Password section */}
-      <div className="bg-white rounded-2xl p-6 card-shadow">
-        <h2 className="text-lg font-semibold text-gray-900 mb-4">Password</h2>
-
-        <div className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Current password
-            </label>
-            <input
-              type="password"
-              placeholder="••••••••"
-              className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              New password
-            </label>
-            <input
-              type="password"
-              placeholder="••••••••"
-              className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Confirm new password
-            </label>
-            <input
-              type="password"
-              placeholder="••••••••"
-              className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
-            />
-          </div>
-
-          <p className="text-xs text-gray-400">Password management will be functional once authentication is implemented.</p>
         </div>
       </div>
     </div>

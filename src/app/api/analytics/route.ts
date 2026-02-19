@@ -1,22 +1,17 @@
 import { NextResponse } from 'next/server';
-import { getDb } from '@/lib/db';
-
-interface CountRow { count: number }
-interface AvgRow { avg: number | null; max: number | null }
-interface TotalRow { total: number | null }
+import { getPool } from '@/lib/db';
 
 export async function GET() {
   try {
-    const db = getDb();
+    const pool = getPool();
 
-    const totalAccounts = db.prepare('SELECT COUNT(*) as count FROM profiles').get() as CountRow;
-    const totalPosts = db.prepare('SELECT COUNT(*) as count FROM posts').get() as CountRow;
-    const avgViral = db.prepare('SELECT AVG(viral_score) as avg, MAX(viral_score) as max FROM posts').get() as AvgRow;
-    const totalViews = db.prepare('SELECT SUM(views) as total FROM posts').get() as TotalRow;
-    const viralPosts = db.prepare('SELECT COUNT(*) as count FROM posts WHERE viral_score >= 100').get() as CountRow;
+    const { rows: [{ count: totalAccounts }] } = await pool.query('SELECT COUNT(*) as count FROM profiles');
+    const { rows: [{ count: totalPosts }] } = await pool.query('SELECT COUNT(*) as count FROM posts');
+    const { rows: [{ avg: avgViral, max: maxViral }] } = await pool.query('SELECT AVG(viral_score) as avg, MAX(viral_score) as max FROM posts');
+    const { rows: [{ total: totalViews }] } = await pool.query('SELECT SUM(views) as total FROM posts');
+    const { rows: [{ count: viralPosts }] } = await pool.query('SELECT COUNT(*) as count FROM posts WHERE viral_score >= 100');
 
-    // Per-account stats
-    const accountStats = db.prepare(`
+    const { rows: accountStats } = await pool.query(`
       SELECT pr.username, pr.platform, pr.followers, pr.avatar_url, pr.display_name,
              COUNT(p.id) as post_count,
              COALESCE(AVG(p.views), 0) as avg_views,
@@ -30,25 +25,24 @@ export async function GET() {
       LEFT JOIN posts p ON p.profile_id = pr.id
       GROUP BY pr.id
       ORDER BY avg_viral_score DESC
-    `).all();
+    `);
 
-    // Top performing posts
-    const topPosts = db.prepare(`
+    const { rows: topPosts } = await pool.query(`
       SELECT p.*, pr.username, pr.platform, pr.avatar_url
       FROM posts p
       JOIN profiles pr ON p.profile_id = pr.id
       ORDER BY p.viral_score DESC
       LIMIT 10
-    `).all();
+    `);
 
     return NextResponse.json({
       overview: {
-        totalAccounts: totalAccounts.count,
-        totalPosts: totalPosts.count,
-        avgViralScore: avgViral.avg || 0,
-        topViralScore: avgViral.max || 0,
-        totalViews: totalViews.total || 0,
-        viralPostCount: viralPosts.count,
+        totalAccounts: Number(totalAccounts),
+        totalPosts: Number(totalPosts),
+        avgViralScore: Number(avgViral) || 0,
+        topViralScore: Number(maxViral) || 0,
+        totalViews: Number(totalViews) || 0,
+        viralPostCount: Number(viralPosts),
       },
       accountStats,
       topPosts,

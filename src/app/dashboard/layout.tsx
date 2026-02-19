@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useState } from 'react';
+import { useSession, signOut } from 'next-auth/react';
 
 const navItems = [
   { name: 'Tracked', href: '/dashboard', icon: '📊' },
@@ -19,6 +20,9 @@ export default function DashboardLayout({
 }) {
   const pathname = usePathname();
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const { data: session } = useSession();
+
+  const userInitial = session?.user?.name?.charAt(0)?.toUpperCase() || session?.user?.image ? null : '?';
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -47,9 +51,9 @@ export default function DashboardLayout({
 
         <nav className="px-4 space-y-1">
           {navItems.map((item) => {
-            const isActive = pathname === item.href || 
+            const isActive = pathname === item.href ||
               (item.href !== '/dashboard' && pathname.startsWith(item.href));
-            
+
             return (
               <Link
                 key={item.name}
@@ -93,7 +97,7 @@ export default function DashboardLayout({
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
             </svg>
           </button>
-          
+
           <div className="flex-1 max-w-xl mx-4">
             {/* Search will be added per-page */}
           </div>
@@ -104,9 +108,23 @@ export default function DashboardLayout({
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
               </svg>
             </button>
-            <div className="w-8 h-8 rounded-full gradient-bg flex items-center justify-center text-white font-semibold">
-              Y
-            </div>
+            {session?.user?.image ? (
+              <img
+                src={session.user.image}
+                alt={session.user.name || 'User'}
+                className="w-8 h-8 rounded-full object-cover"
+              />
+            ) : (
+              <div className="w-8 h-8 rounded-full gradient-bg flex items-center justify-center text-white font-semibold">
+                {userInitial}
+              </div>
+            )}
+            <button
+              onClick={() => signOut({ callbackUrl: '/' })}
+              className="text-sm text-gray-500 hover:text-gray-700"
+            >
+              Sign out
+            </button>
           </div>
         </header>
 

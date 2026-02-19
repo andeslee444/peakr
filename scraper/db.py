@@ -1,15 +1,28 @@
-"""SQLite database layer for Peakr."""
+"""PostgreSQL database layer for Peakr."""
 
-import sqlite3
 import os
+import psycopg2
+import psycopg2.extras
 from datetime import datetime
 from typing import Optional
 
-DB_PATH = os.path.join(os.path.dirname(__file__), '..', 'data', 'peakr.db')
+DATABASE_URL = os.environ.get('DATABASE_URL', '')
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS users (
+  id SERIAL PRIMARY KEY,
+  tiktok_id TEXT UNIQUE,
+  username TEXT,
+  display_name TEXT,
+  avatar_url TEXT,
+  email TEXT UNIQUE,
+  password_hash TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  last_login_at TIMESTAMPTZ
+);
+
 CREATE TABLE IF NOT EXISTS profiles (
-  id INTEGER PRIMARY KEY,
+  id SERIAL PRIMARY KEY,
   username TEXT NOT NULL,
   platform TEXT NOT NULL DEFAULT 'tiktok',
   display_name TEXT,
@@ -20,13 +33,13 @@ CREATE TABLE IF NOT EXISTS profiles (
   total_likes INTEGER DEFAULT 0,
   post_count INTEGER DEFAULT 0,
   avg_views REAL DEFAULT 0,
-  last_scraped_at DATETIME,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  last_scraped_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE(username, platform)
 );
 
 CREATE TABLE IF NOT EXISTS posts (
-  id INTEGER PRIMARY KEY,
+  id SERIAL PRIMARY KEY,
   profile_id INTEGER REFERENCES profiles(id),
   platform_id TEXT NOT NULL,
   post_url TEXT,
@@ -37,44 +50,45 @@ CREATE TABLE IF NOT EXISTS posts (
   comments INTEGER DEFAULT 0,
   shares INTEGER DEFAULT 0,
   duration_seconds INTEGER,
+  is_video BOOLEAN DEFAULT FALSE,
   viral_score REAL DEFAULT 0,
-  posted_at DATETIME,
-  scraped_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  posted_at TIMESTAMPTZ,
+  scraped_at TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE(profile_id, platform_id)
 );
 
 CREATE TABLE IF NOT EXISTS scrape_log (
-  id INTEGER PRIMARY KEY,
+  id SERIAL PRIMARY KEY,
   profile_id INTEGER REFERENCES profiles(id),
   status TEXT,
   posts_found INTEGER DEFAULT 0,
   error_message TEXT,
   duration_ms INTEGER,
-  scraped_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  scraped_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS saved_posts (
-  id INTEGER PRIMARY KEY,
+  id SERIAL PRIMARY KEY,
   post_id INTEGER REFERENCES posts(id),
   folder TEXT DEFAULT 'default',
   notes TEXT,
-  saved_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  saved_at TIMESTAMPTZ DEFAULT NOW()
 );
 """
 
 
-def get_conn() -> sqlite3.Connection:
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
+def get_conn():
+    conn = psycopg2.connect(DATABASE_URL)
+    conn.autocommit = False
     return conn
 
 
 def init_db():
     conn = get_conn()
-    conn.executescript(SCHEMA)
+    cur = conn.cursor()
+    cur.execute(SCHEMA)
+    conn.commit()
+    cur.close()
     conn.close()
 
 
@@ -82,15 +96,18 @@ def add_profile(username: str, platform: str = 'tiktok') -> int:
     """Add or get a profile. Returns profile id."""
     username = username.lstrip('@')
     conn = get_conn()
-    conn.execute(
-        "INSERT OR IGNORE INTO profiles (username, platform) VALUES (?, ?)",
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute(
+        "INSERT INTO profiles (username, platform) VALUES (%s, %s) ON CONFLICT (username, platform) DO NOTHING",
         (username, platform)
     )
     conn.commit()
-    row = conn.execute(
-        "SELECT id FROM profiles WHERE username=? AND platform=?",
+    cur.execute(
+        "SELECT id FROM profiles WHERE username=%s AND platform=%s",
         (username, platform)
-    ).fetchone()
+    )
+    row = cur.fetchone()
+    cur.close()
     conn.close()
     return row['id']
 
@@ -98,42 +115,52 @@ def add_profile(username: str, platform: str = 'tiktok') -> int:
 def get_profile(username: str, platform: str = 'tiktok') -> Optional[dict]:
     username = username.lstrip('@')
     conn = get_conn()
-    row = conn.execute(
-        "SELECT * FROM profiles WHERE username=? AND platform=?",
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute(
+        "SELECT * FROM profiles WHERE username=%s AND platform=%s",
         (username, platform)
-    ).fetchone()
+    )
+    row = cur.fetchone()
+    cur.close()
     conn.close()
     return dict(row) if row else None
 
 
 def get_all_profiles() -> list[dict]:
     conn = get_conn()
-    rows = conn.execute("SELECT * FROM profiles ORDER BY last_scraped_at DESC").fetchall()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute("SELECT * FROM profiles ORDER BY last_scraped_at DESC NULLS FIRST")
+    rows = cur.fetchall()
+    cur.close()
     conn.close()
     return [dict(r) for r in rows]
 
 
 def update_profile(profile_id: int, **kwargs):
     conn = get_conn()
-    sets = ', '.join(f"{k}=?" for k in kwargs)
-    vals = list(kwargs.values()) + [profile_id]
-    conn.execute(f"UPDATE profiles SET {sets} WHERE id=?", vals)
+    cur = conn.cursor()
+    keys = list(kwargs.keys())
+    sets = ', '.join(f"{k}=%s" for k in keys)
+    vals = [kwargs[k] for k in keys] + [profile_id]
+    cur.execute(f"UPDATE profiles SET {sets} WHERE id=%s", vals)
     conn.commit()
+    cur.close()
     conn.close()
 
 
 def add_posts(profile_id: int, posts: list[dict]):
     """Upsert posts for a profile."""
     conn = get_conn()
+    cur = conn.cursor()
     for p in posts:
-        conn.execute("""
+        cur.execute("""
             INSERT INTO posts (profile_id, platform_id, post_url, thumbnail_url, description,
                               views, likes, comments, shares, duration_seconds, viral_score, posted_at, scraped_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT(profile_id, platform_id) DO UPDATE SET
-                views=excluded.views, likes=excluded.likes, comments=excluded.comments,
-                shares=excluded.shares, viral_score=excluded.viral_score, scraped_at=excluded.scraped_at,
-                thumbnail_url=excluded.thumbnail_url, description=excluded.description
+                views=EXCLUDED.views, likes=EXCLUDED.likes, comments=EXCLUDED.comments,
+                shares=EXCLUDED.shares, viral_score=EXCLUDED.viral_score, scraped_at=EXCLUDED.scraped_at,
+                thumbnail_url=EXCLUDED.thumbnail_url, description=EXCLUDED.description
         """, (
             profile_id, p.get('platform_id', ''), p.get('post_url', ''),
             p.get('thumbnail_url', ''), p.get('description', ''),
@@ -142,28 +169,35 @@ def add_posts(profile_id: int, posts: list[dict]):
             p.get('posted_at'), datetime.utcnow().isoformat()
         ))
     conn.commit()
+    cur.close()
     conn.close()
 
 
 def get_posts(profile_id: int, limit: int = 50) -> list[dict]:
     conn = get_conn()
-    rows = conn.execute(
-        "SELECT * FROM posts WHERE profile_id=? ORDER BY viral_score DESC LIMIT ?",
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute(
+        "SELECT * FROM posts WHERE profile_id=%s ORDER BY viral_score DESC LIMIT %s",
         (profile_id, limit)
-    ).fetchall()
+    )
+    rows = cur.fetchall()
+    cur.close()
     conn.close()
     return [dict(r) for r in rows]
 
 
 def get_top_content(limit: int = 20) -> list[dict]:
     conn = get_conn()
-    rows = conn.execute("""
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute("""
         SELECT p.*, pr.username, pr.platform, pr.avatar_url, pr.display_name
         FROM posts p
         JOIN profiles pr ON p.profile_id = pr.id
         ORDER BY p.viral_score DESC
-        LIMIT ?
-    """, (limit,)).fetchall()
+        LIMIT %s
+    """, (limit,))
+    rows = cur.fetchall()
+    cur.close()
     conn.close()
     return [dict(r) for r in rows]
 
@@ -171,11 +205,13 @@ def get_top_content(limit: int = 20) -> list[dict]:
 def log_scrape(profile_id: int, status: str, posts_found: int = 0,
                error_message: str = None, duration_ms: int = 0):
     conn = get_conn()
-    conn.execute("""
+    cur = conn.cursor()
+    cur.execute("""
         INSERT INTO scrape_log (profile_id, status, posts_found, error_message, duration_ms)
-        VALUES (?, ?, ?, ?, ?)
+        VALUES (%s, %s, %s, %s, %s)
     """, (profile_id, status, posts_found, error_message, duration_ms))
     conn.commit()
+    cur.close()
     conn.close()
 
 

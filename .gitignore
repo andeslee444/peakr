@@ -45,3 +45,9 @@ __pycache__/
 
 # peakr data
 /data/
+
+# terraform
+terraform/.terraform/
+terraform/*.tfstate
+terraform/*.tfstate.backup
+terraform/*.tfvars

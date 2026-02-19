@@ -2,9 +2,11 @@
 
 import Link from 'next/link';
 import { useState } from 'react';
+import { useSession } from 'next-auth/react';
 
 export default function Navigation() {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const { data: session } = useSession();
 
   const scrollTo = (id: string) => {
     const el = document.getElementById(id);
@@ -33,15 +35,26 @@ export default function Navigation() {
             <button onClick={() => scrollTo('pricing')} className="text-gray-600 hover:text-gray-900 font-medium">
               Pricing
             </button>
-            <Link href="/login" className="text-gray-600 hover:text-gray-900 font-medium">
-              Login
-            </Link>
-            <Link
-              href="/signup"
-              className="gradient-bg text-white px-5 py-2 rounded-full font-medium hover:opacity-90 transition-opacity"
-            >
-              Go Viral
-            </Link>
+            {session ? (
+              <Link
+                href="/dashboard"
+                className="gradient-bg text-white px-5 py-2 rounded-full font-medium hover:opacity-90 transition-opacity"
+              >
+                Dashboard
+              </Link>
+            ) : (
+              <>
+                <Link href="/login" className="text-gray-600 hover:text-gray-900 font-medium">
+                  Login
+                </Link>
+                <Link
+                  href="/login"
+                  className="gradient-bg text-white px-5 py-2 rounded-full font-medium hover:opacity-90 transition-opacity"
+                >
+                  Go Viral
+                </Link>
+              </>
+            )}
           </div>
 
           {/* Mobile menu button */}
@@ -70,15 +83,26 @@ export default function Navigation() {
             <button onClick={() => scrollTo('pricing')} className="block w-full text-left text-gray-600 hover:text-gray-900 font-medium">
               Pricing
             </button>
-            <Link href="/login" className="block text-gray-600 hover:text-gray-900 font-medium">
-              Login
-            </Link>
-            <Link
-              href="/signup"
-              className="block text-center gradient-bg text-white px-5 py-2 rounded-full font-medium"
-            >
-              Go Viral
-            </Link>
+            {session ? (
+              <Link
+                href="/dashboard"
+                className="block text-center gradient-bg text-white px-5 py-2 rounded-full font-medium"
+              >
+                Dashboard
+              </Link>
+            ) : (
+              <>
+                <Link href="/login" className="block text-gray-600 hover:text-gray-900 font-medium">
+                  Login
+                </Link>
+                <Link
+                  href="/login"
+                  className="block text-center gradient-bg text-white px-5 py-2 rounded-full font-medium"
+                >
+                  Go Viral
+                </Link>
+              </>
+            )}
           </div>
         )}
       </div>

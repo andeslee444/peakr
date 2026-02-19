@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getDb } from '@/lib/db';
+import { getPool } from '@/lib/db';
 
 export async function GET(request: NextRequest) {
   try {
@@ -8,7 +8,7 @@ export async function GET(request: NextRequest) {
     const platform = searchParams.get('platform');
     const limit = Math.min(parseInt(searchParams.get('limit') || '50', 10) || 50, 200);
 
-    const db = getDb();
+    const pool = getPool();
 
     let orderBy: string;
     switch (sort) {
@@ -22,15 +22,17 @@ export async function GET(request: NextRequest) {
       FROM posts p
       JOIN profiles pr ON p.profile_id = pr.id
     `;
-    const params: string[] = [];
+    const params: (string | number)[] = [];
+    let paramIndex = 1;
+
     if (platform && platform !== 'all') {
-      query += ' WHERE pr.platform = ?';
+      query += ` WHERE pr.platform = $${paramIndex++}`;
       params.push(platform);
     }
-    query += ` ORDER BY ${orderBy} LIMIT ?`;
-    params.push(String(limit));
+    query += ` ORDER BY ${orderBy} LIMIT $${paramIndex}`;
+    params.push(limit);
 
-    const posts = db.prepare(query).all(...params);
+    const { rows: posts } = await pool.query(query, params);
     return NextResponse.json({ posts });
   } catch {
     return NextResponse.json({ posts: [], error: 'Failed to fetch posts' }, { status: 500 });

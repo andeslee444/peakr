@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { execFileSync } from 'child_process';
-import { getDb } from '@/lib/db';
+import { getPool } from '@/lib/db';
 
 const USERNAME_RE = /^[a-zA-Z0-9_.]{1,30}$/;
 
@@ -19,22 +18,20 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'invalid username format' }, { status: 400 });
     }
 
-    // Trigger the appropriate Python scraper
-    const scraperModule = platform === 'instagram' ? 'scraper.instagram' : 'scraper.tiktok';
-    try {
-      execFileSync('python3', ['-m', scraperModule, clean], {
-        timeout: 90000,
-        stdio: 'pipe',
-        cwd: process.cwd(),
-      });
-    } catch (e: unknown) {
-      const stderr = e instanceof Error && 'stderr' in e ? (e as NodeJS.ErrnoException & { stderr?: Buffer }).stderr : null;
-      console.error('Scraper error:', stderr?.toString());
-    }
+    const pool = getPool();
+
+    // Insert the profile (or do nothing if it already exists).
+    // The daemon on Mac Mini will pick up profiles with last_scraped_at IS NULL.
+    await pool.query(
+      `INSERT INTO profiles (username, platform) VALUES ($1, $2) ON CONFLICT (username, platform) DO NOTHING`,
+      [clean, platform]
+    );
 
     // Read back from DB
-    const db = getDb();
-    const profile = db.prepare('SELECT * FROM profiles WHERE username = ? AND platform = ?').get(clean, platform);
+    const { rows: [profile] } = await pool.query(
+      'SELECT * FROM profiles WHERE username = $1 AND platform = $2',
+      [clean, platform]
+    );
 
     if (!profile) {
       return NextResponse.json(

@@ -12,7 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from scraper.db import get_all_profiles, get_profile
+from scraper.db import get_all_profiles
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("peakr-daemon")
@@ -68,13 +68,16 @@ def run_daemon():
 
             stale = []
             for p in all_profiles:
-                if p.get("last_scraped_at"):
-                    try:
-                        last = datetime.fromisoformat(p["last_scraped_at"])
-                        if last > cutoff:
-                            continue
-                    except (ValueError, TypeError):
-                        pass
+                last = p.get("last_scraped_at")
+                if last is not None:
+                    # psycopg2 returns datetime objects for TIMESTAMPTZ
+                    if isinstance(last, str):
+                        try:
+                            last = datetime.fromisoformat(last)
+                        except (ValueError, TypeError):
+                            last = None
+                    if last is not None and last.replace(tzinfo=None) > cutoff:
+                        continue
                 stale.append((p["username"], p["platform"]))
 
             if not stale:

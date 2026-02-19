@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getDb } from '@/lib/db';
+import { getPool } from '@/lib/db';
 
 export async function DELETE(
   request: Request,
@@ -7,9 +7,9 @@ export async function DELETE(
 ) {
   try {
     const { id } = await params;
-    const db = getDb();
-    const result = db.prepare('DELETE FROM saved_posts WHERE id = ?').run(id);
-    if (result.changes === 0) {
+    const pool = getPool();
+    const result = await pool.query('DELETE FROM saved_posts WHERE id = $1', [id]);
+    if (result.rowCount === 0) {
       return NextResponse.json({ error: 'Saved post not found' }, { status: 404 });
     }
     return NextResponse.json({ ok: true });
