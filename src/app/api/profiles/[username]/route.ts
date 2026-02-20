@@ -51,6 +51,7 @@ export async function DELETE(
     }
 
     await pool.query('DELETE FROM saved_posts WHERE post_id IN (SELECT id FROM posts WHERE profile_id = $1)', [profile.id]);
+    await pool.query('DELETE FROM scrape_queue WHERE profile_id = $1', [profile.id]);
     await pool.query('DELETE FROM scrape_log WHERE profile_id = $1', [profile.id]);
     await pool.query('DELETE FROM posts WHERE profile_id = $1', [profile.id]);
     await pool.query('DELETE FROM profiles WHERE id = $1', [profile.id]);

@@ -4,6 +4,12 @@ export interface HookAnalysis {
   hook_visual: string;
   hook_explanation: string;
   hook_score: number;
+  niche?: string;
+  hook_format?: string;
+  target_audience?: string;
+  emotional_trigger?: string;
+  cta_type?: string | null;
+  hook_template?: string;
 }
 
 export interface Profile {

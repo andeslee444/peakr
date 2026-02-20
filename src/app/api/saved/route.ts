@@ -43,12 +43,28 @@ export async function POST(request: Request) {
 
     const pool = getPool();
     const { rows: [row] } = await pool.query(
-      'INSERT INTO saved_posts (post_id, folder, notes) VALUES ($1, $2, $3) RETURNING id',
+      `INSERT INTO saved_posts (post_id, folder, notes) VALUES ($1, $2, $3)
+       ON CONFLICT (post_id) DO UPDATE SET folder = EXCLUDED.folder, notes = EXCLUDED.notes
+       RETURNING id`,
       [post_id, folder, notes]
     );
 
     return NextResponse.json({ id: row.id });
   } catch {
     return NextResponse.json({ error: 'Failed to save post' }, { status: 500 });
+  }
+}
+
+export async function DELETE(request: Request) {
+  try {
+    const { post_id } = await request.json();
+    if (!post_id) {
+      return NextResponse.json({ error: 'post_id required' }, { status: 400 });
+    }
+    const pool = getPool();
+    await pool.query('DELETE FROM saved_posts WHERE post_id = $1', [post_id]);
+    return NextResponse.json({ ok: true });
+  } catch {
+    return NextResponse.json({ error: 'Failed to unsave post' }, { status: 500 });
   }
 }

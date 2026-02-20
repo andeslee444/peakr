@@ -18,9 +18,11 @@ export async function GET(request: NextRequest) {
     }
 
     let query = `
-      SELECT p.*, pr.username, pr.platform, pr.avatar_url, pr.display_name
+      SELECT p.*, pr.username, pr.platform, pr.avatar_url, pr.display_name,
+             (sp.id IS NOT NULL) AS is_saved
       FROM posts p
       JOIN profiles pr ON p.profile_id = pr.id
+      LEFT JOIN saved_posts sp ON sp.post_id = p.id
     `;
     const params: (string | number)[] = [];
     let paramIndex = 1;

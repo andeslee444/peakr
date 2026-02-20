@@ -10,9 +10,13 @@ from typing import Optional
 
 from curl_cffi import requests
 
+import logging
+
 from scraper.db import add_profile, update_profile, add_posts, get_profile, log_scrape
 from scraper.proxy import get_proxy_config, is_wireproxy_running
 from scraper.utils import random_delay, save_cookies, load_cookies
+
+log = logging.getLogger("peakr-tiktok")
 
 
 def _get_session() -> requests.Session:
@@ -342,6 +346,67 @@ def scrape_and_store(username: str, headless: bool = True) -> bool:
     username = username.lstrip('@')
     result = scrape_profile(username)
     return bool(result.get('videos'))
+
+
+def scrape_hashtag_creators(hashtag: str, limit: int = 20) -> list:
+    """Scrape top creator usernames from a TikTok hashtag page.
+
+    Fetches the tag page and extracts usernames from the embedded
+    __UNIVERSAL_DATA_FOR_REHYDRATION__ JSON data.
+
+    Returns list of unique usernames (strings, no @ prefix).
+    """
+    session = _get_session()
+    url = f"https://www.tiktok.com/tag/{hashtag.lstrip('#')}"
+
+    try:
+        resp = session.get(url, timeout=30)
+        if resp.status_code != 200:
+            log.warning(f"TikTok tag page HTTP {resp.status_code} for #{hashtag}")
+            return []
+
+        html = resp.text
+
+        # Extract embedded JSON data
+        match = re.search(
+            r'<script[^>]*id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>(.*?)</script>',
+            html, re.DOTALL,
+        )
+        if not match:
+            log.debug(f"No rehydration data found for #{hashtag}")
+            return []
+
+        data = json.loads(match.group(1))
+
+        # Navigate to the item list in the JSON structure
+        usernames = set()
+        default_scope = data.get("__DEFAULT_SCOPE__", {})
+
+        # Try multiple known paths for tag page data
+        for key in default_scope:
+            node = default_scope[key]
+            if not isinstance(node, dict):
+                continue
+            # Look for itemList or similar structures
+            items = node.get("itemList", node.get("items", []))
+            if not isinstance(items, list):
+                continue
+            for item in items:
+                author = item.get("author", {})
+                uname = author.get("uniqueId") or author.get("unique_id")
+                if uname:
+                    usernames.add(uname)
+
+        result = list(usernames)[:limit]
+        log.info(f"TikTok #{hashtag}: found {len(result)} creators")
+        return result
+
+    except json.JSONDecodeError as e:
+        log.warning(f"Failed to parse TikTok tag JSON for #{hashtag}: {e}")
+        return []
+    except Exception as e:
+        log.warning(f"Error scraping TikTok #{hashtag}: {e}")
+        return []
 
 
 if __name__ == '__main__':

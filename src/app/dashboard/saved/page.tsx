@@ -3,8 +3,9 @@
 import { useState, useEffect, useCallback } from 'react';
 import Image from 'next/image';
 import { formatNumber, formatViralScore, proxyImg } from '@/lib/format';
-import type { SavedPost } from '@/lib/types';
+import type { SavedPost, HookAnalysis } from '@/lib/types';
 import { HookOverlay, HookTextExcerpt } from '@/components/HookBadge';
+import InsightsPanel from '@/components/InsightsPanel';
 
 export default function SavedPage() {
   const [saved, setSaved] = useState<SavedPost[]>([]);
@@ -17,7 +18,7 @@ export default function SavedPage() {
   const [importFolder, setImportFolder] = useState('default');
   const [importLoading, setImportLoading] = useState(false);
   const [importMsg, setImportMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
-  const [analyzingId, setAnalyzingId] = useState<number | null>(null);
+  const [selectedPost, setSelectedPost] = useState<SavedPost | null>(null);
 
   const fetchSaved = useCallback(async () => {
     setLoading(true);
@@ -82,24 +83,10 @@ export default function SavedPage() {
     }
   };
 
-  const analyzeHook = async (postId: number) => {
-    setAnalyzingId(postId);
-    try {
-      const res = await fetch('/api/analyze-hook', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ post_id: postId }),
-      });
-      const data = await res.json();
-      if (data.status === 'already_analyzed') {
-        setSaved(prev => prev.map(s =>
-          s.post_id === postId ? { ...s, hook_analysis: data.hook_analysis, analyzed_at: data.analyzed_at, transcript: data.transcript } : s
-        ));
-      }
-    } finally {
-      setAnalyzingId(null);
-    }
-  };
+  const handlePostUpdate = useCallback((postId: number, updates: { hook_analysis: HookAnalysis; analyzed_at: string; transcript: string | null }) => {
+    setSaved(prev => prev.map(s => s.post_id === postId ? { ...s, ...updates } : s));
+    setSelectedPost(prev => prev && prev.post_id === postId ? { ...prev, ...updates } : prev);
+  }, []);
 
   const allFolders = ['All', ...folders.filter(f => f !== 'All')];
 
@@ -209,10 +196,12 @@ export default function SavedPage() {
           {saved.map(item => (
             <div
               key={item.id}
-              onClick={() => item.post_url && window.open(item.post_url, '_blank')}
-              className="bg-white rounded-2xl overflow-hidden card-shadow hover:shadow-lg transition-shadow cursor-pointer group"
+              className="bg-white rounded-2xl overflow-hidden card-shadow hover:shadow-lg transition-shadow group"
             >
-              <div className="relative aspect-[9/16] bg-gradient-to-br from-purple-400 to-pink-500 flex items-center justify-center overflow-hidden">
+              <div
+                className="relative aspect-[9/16] bg-gradient-to-br from-purple-400 to-pink-500 flex items-center justify-center overflow-hidden cursor-pointer"
+                onClick={() => item.post_url && window.open(item.post_url, '_blank')}
+              >
                 {item.thumbnail_url ? (
                   <Image src={proxyImg(item.thumbnail_url)!} alt="" fill className="object-cover" unoptimized />
                 ) : (
@@ -234,22 +223,6 @@ export default function SavedPage() {
                 )}
 
                 <div className="absolute bottom-3 right-3 flex items-center gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                  {!item.analyzed_at && (
-                    <button
-                      onClick={(e) => { e.stopPropagation(); analyzeHook(item.post_id); }}
-                      disabled={analyzingId === item.post_id}
-                      className="bg-white/90 hover:bg-white p-2 rounded-full transition-colors"
-                      title="Analyze hook with AI"
-                    >
-                      {analyzingId === item.post_id ? (
-                        <span className="block w-5 h-5 animate-spin border-2 border-indigo-500 border-t-transparent rounded-full" />
-                      ) : (
-                        <svg className="w-5 h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
-                        </svg>
-                      )}
-                    </button>
-                  )}
                   <button
                     onClick={(e) => { e.stopPropagation(); removeSaved(item.id); }}
                     className="bg-red-500 hover:bg-red-600 p-2 rounded-full transition-colors"
@@ -261,7 +234,10 @@ export default function SavedPage() {
                 </div>
               </div>
 
-              <div className="p-4">
+              <div
+                className="p-4 cursor-pointer hover:bg-gray-50 transition-colors"
+                onClick={() => setSelectedPost(item)}
+              >
                 <div className="flex items-center justify-between">
                   <div className="flex items-center space-x-2">
                     <span className="text-xs">{item.platform === 'instagram' ? '📸' : '🎵'}</span>
@@ -280,6 +256,13 @@ export default function SavedPage() {
           ))}
         </div>
       )}
+
+      <InsightsPanel
+        post={selectedPost}
+        open={!!selectedPost}
+        onClose={() => setSelectedPost(null)}
+        onPostUpdate={handlePostUpdate}
+      />
     </div>
   );
 }

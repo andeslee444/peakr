@@ -22,11 +22,17 @@ You are given:
 Analyze the hook and return a JSON object with these fields:
 
 {
-  "hook_type": one of: "question", "shock/surprise", "curiosity gap", "story opener", "bold claim", "visual spectacle", "direct address", "trend/sound",
+  "hook_type": one of: "question", "shock/surprise", "curiosity gap", "story opener", "bold claim", "visual spectacle", "direct address", "trend/sound", "before/after", "social proof", "POV", "tutorial/value",
   "hook_text": "the exact opening words from the first 3-5 seconds of the transcript",
   "hook_visual": "description of what's visually shown in the hook frames",
   "hook_explanation": "2-3 sentences explaining why this hook works and what psychological trigger it uses",
-  "hook_score": integer 1-10 rating of hook effectiveness
+  "hook_score": integer 1-10 rating of hook effectiveness,
+  "niche": one of: "fitness", "finance", "business", "beauty", "food", "comedy", "lifestyle", "health", "fashion", "tech", "real-estate", "education", "motivation", "travel", "parenting",
+  "hook_format": one of: "text overlay", "talking head", "voiceover + b-roll", "skit/acting", "screen recording", "slideshow", "transition reveal", "green screen",
+  "target_audience": "1-2 word description of who this content targets (e.g. 'gym beginners', 'young moms', 'tech workers')",
+  "emotional_trigger": one of: "fear of missing out", "curiosity", "aspiration", "shock/awe", "humor", "empathy", "urgency", "controversy", "nostalgia",
+  "cta_type": one of: "follow", "like/save", "comment", "share", "link/bio", "none" (or null if no CTA),
+  "hook_template": "a reusable template version of the hook with [BRACKETS] for swappable parts, e.g. 'I tried [THING] for [TIME PERIOD] and here's what happened'"
 }
 
 Return ONLY the JSON object, no other text."""
@@ -110,7 +116,8 @@ Full transcript:
         result = json.loads(text)
 
         # Validate required fields
-        required = ["hook_type", "hook_text", "hook_visual", "hook_explanation", "hook_score"]
+        required = ["hook_type", "hook_text", "hook_visual", "hook_explanation", "hook_score",
+                     "niche", "hook_format", "target_audience", "emotional_trigger", "cta_type", "hook_template"]
         if not all(k in result for k in required):
             log.error(f"Missing fields in hook analysis: {result.keys()}")
             return None

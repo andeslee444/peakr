@@ -8,6 +8,7 @@ import os
 import sys
 import time
 import shutil
+import base64
 import logging
 import tempfile
 import argparse
@@ -87,8 +88,17 @@ def analyze_post(post: dict) -> bool:
             log.error(f"Hook analysis failed for post {post_id}")
             return False
 
-        # 6. Save to DB
-        save_hook_analysis(post_id, transcript or "", analysis)
+        # 6. Encode first keyframe as base64
+        keyframe_b64 = None
+        if keyframes:
+            try:
+                with open(keyframes[0], "rb") as f:
+                    keyframe_b64 = base64.standard_b64encode(f.read()).decode("utf-8")
+            except Exception as e:
+                log.warning(f"Could not encode keyframe for post {post_id}: {e}")
+
+        # 7. Save to DB
+        save_hook_analysis(post_id, transcript or "", analysis, keyframe_base64=keyframe_b64)
         log.info(f"[{username}] Post {post_id} analyzed: {analysis.get('hook_type')} (score: {analysis.get('hook_score')})")
         return True
 

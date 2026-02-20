@@ -7,10 +7,11 @@ import { useSession, signOut } from 'next-auth/react';
 
 const navItems = [
   { name: 'Tracked', href: '/dashboard', icon: '📊' },
-  { name: 'Explore', href: '/dashboard/explore', icon: '🔍' },
+  { name: 'Hook Lab', href: '/dashboard/hook-lab', icon: '🪝' },
   { name: 'Saved', href: '/dashboard/saved', icon: '💾' },
-  { name: 'Analytics', href: '/dashboard/analytics', icon: '📈' },
-  { name: 'Account', href: '/dashboard/account', icon: '👤' },
+  { name: 'Playbook', href: '/dashboard/playbook', icon: '📖' },
+  { name: 'Profile', href: '/dashboard/profile', icon: '👤' },
+  { name: 'Account', href: '/dashboard/account', icon: '⚙️' },
 ];
 
 export default function DashboardLayout({

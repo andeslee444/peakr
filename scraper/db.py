@@ -72,7 +72,7 @@ CREATE TABLE IF NOT EXISTS scrape_log (
 
 CREATE TABLE IF NOT EXISTS saved_posts (
   id SERIAL PRIMARY KEY,
-  post_id INTEGER REFERENCES posts(id),
+  post_id INTEGER UNIQUE REFERENCES posts(id),
   folder TEXT DEFAULT 'default',
   notes TEXT,
   saved_at TIMESTAMPTZ DEFAULT NOW()
@@ -85,6 +85,66 @@ CREATE TABLE IF NOT EXISTS scrape_queue (
   created_at TIMESTAMPTZ DEFAULT NOW(),
   started_at TIMESTAMPTZ,
   completed_at TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS seed_creators (
+  id SERIAL PRIMARY KEY,
+  username TEXT NOT NULL,
+  platform TEXT NOT NULL DEFAULT 'tiktok',
+  niche TEXT NOT NULL,
+  tier TEXT DEFAULT 'seed',
+  follower_count INTEGER,
+  is_active BOOLEAN DEFAULT TRUE,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(username, platform)
+);
+
+CREATE TABLE IF NOT EXISTS daily_top_hooks (
+  id SERIAL PRIMARY KEY,
+  post_id INTEGER REFERENCES posts(id),
+  rank INTEGER,
+  date DATE NOT NULL,
+  niche TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(post_id, date)
+);
+
+CREATE TABLE IF NOT EXISTS creator_profiles (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER REFERENCES users(id) UNIQUE,
+  niche TEXT,
+  content_style TEXT,
+  target_audience TEXT,
+  unique_angle TEXT,
+  platforms JSONB,
+  inspiration_creators JSONB,
+  background_qa JSONB,
+  onboarding_step TEXT DEFAULT 'not_started',
+  completed_at TIMESTAMPTZ,
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS saved_hooks (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER REFERENCES users(id),
+  post_id INTEGER REFERENCES posts(id),
+  notes TEXT,
+  saved_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(user_id, post_id)
+);
+
+CREATE TABLE IF NOT EXISTS playbook_sections (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER REFERENCES users(id),
+  title TEXT,
+  hook_type TEXT,
+  niche TEXT,
+  templates JSONB,
+  source_post_ids JSONB,
+  why_it_works TEXT,
+  generated_at TIMESTAMPTZ,
+  updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 """
 
@@ -234,6 +294,17 @@ def migrate_hook_columns():
     cur = conn.cursor()
     for col, typ in [('transcript', 'TEXT'), ('hook_analysis', 'JSONB'), ('analyzed_at', 'TIMESTAMPTZ')]:
         cur.execute(f"ALTER TABLE posts ADD COLUMN IF NOT EXISTS {col} {typ}")
+    cur.execute("ALTER TABLE profiles ADD COLUMN IF NOT EXISTS primary_niche TEXT")
+    cur.execute("ALTER TABLE posts ADD COLUMN IF NOT EXISTS keyframe_base64 TEXT")
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS video_url_cache (
+            id SERIAL PRIMARY KEY,
+            post_url TEXT UNIQUE NOT NULL,
+            video_url TEXT NOT NULL,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            expires_at TIMESTAMPTZ NOT NULL
+        )
+    """)
     conn.commit()
     cur.close()
     conn.close()
@@ -267,15 +338,23 @@ def get_unanalyzed_viral_posts(threshold: float = 1.5, limit: int = 10) -> list[
     return [dict(r) for r in rows]
 
 
-def save_hook_analysis(post_id: int, transcript: str, hook_analysis_dict: dict):
+def save_hook_analysis(post_id: int, transcript: str, hook_analysis_dict: dict,
+                       keyframe_base64: Optional[str] = None):
     """Save hook analysis results to a post."""
     import json
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute("""
-        UPDATE posts SET transcript = %s, hook_analysis = %s, analyzed_at = NOW()
-        WHERE id = %s
-    """, (transcript, json.dumps(hook_analysis_dict), post_id))
+    if keyframe_base64:
+        cur.execute("""
+            UPDATE posts SET transcript = %s, hook_analysis = %s, analyzed_at = NOW(),
+                            keyframe_base64 = %s
+            WHERE id = %s
+        """, (transcript, json.dumps(hook_analysis_dict), keyframe_base64, post_id))
+    else:
+        cur.execute("""
+            UPDATE posts SET transcript = %s, hook_analysis = %s, analyzed_at = NOW()
+            WHERE id = %s
+        """, (transcript, json.dumps(hook_analysis_dict), post_id))
     conn.commit()
     cur.close()
     conn.close()
@@ -320,6 +399,114 @@ def complete_scrape_queue(queue_id: int, status: str = 'done'):
         "UPDATE scrape_queue SET status=%s, completed_at=NOW() WHERE id=%s",
         (status, queue_id)
     )
+    conn.commit()
+    cur.close()
+    conn.close()
+
+
+def get_active_seed_creators(platform: Optional[str] = None) -> list[dict]:
+    """Get all active seed creators, optionally filtered by platform."""
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    if platform:
+        cur.execute("SELECT * FROM seed_creators WHERE is_active = TRUE AND platform = %s ORDER BY id", (platform,))
+    else:
+        cur.execute("SELECT * FROM seed_creators WHERE is_active = TRUE ORDER BY id")
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_top_seed_creators(limit: int = 50) -> list[dict]:
+    """Get top seed creators ranked by avg viral_score of their recent posts."""
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute("""
+        SELECT sc.*, pr.id as profile_id,
+               AVG(p.viral_score) as avg_viral
+        FROM seed_creators sc
+        JOIN profiles pr ON pr.username = sc.username AND pr.platform = sc.platform
+        JOIN posts p ON p.profile_id = pr.id
+        WHERE sc.is_active = TRUE
+          AND p.scraped_at > NOW() - INTERVAL '7 days'
+        GROUP BY sc.id, pr.id
+        ORDER BY avg_viral DESC
+        LIMIT %s
+    """, (limit,))
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def upsert_seed_creator(username: str, platform: str, niche: str,
+                        tier: str = 'seed', follower_count: Optional[int] = None):
+    """Insert or update a seed creator."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO seed_creators (username, platform, niche, tier, follower_count)
+        VALUES (%s, %s, %s, %s, %s)
+        ON CONFLICT (username, platform) DO UPDATE SET
+            niche = EXCLUDED.niche,
+            tier = EXCLUDED.tier,
+            follower_count = COALESCE(EXCLUDED.follower_count, seed_creators.follower_count)
+    """, (username, platform, niche, tier, follower_count))
+    conn.commit()
+    cur.close()
+    conn.close()
+
+
+def compute_daily_top_hooks(limit: int = 50):
+    """Compute daily top hooks by hook_score * viral_score and insert into daily_top_hooks."""
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    today = datetime.utcnow().date().isoformat()
+
+    # Top overall
+    cur.execute("""
+        INSERT INTO daily_top_hooks (post_id, rank, date, niche)
+        SELECT p.id, ROW_NUMBER() OVER (ORDER BY (p.hook_analysis->>'hook_score')::int * p.viral_score DESC),
+               %s::date, p.hook_analysis->>'niche'
+        FROM posts p
+        WHERE p.analyzed_at IS NOT NULL
+          AND p.analyzed_at > NOW() - INTERVAL '48 hours'
+        ORDER BY (p.hook_analysis->>'hook_score')::int * p.viral_score DESC
+        LIMIT %s
+        ON CONFLICT (post_id, date) DO NOTHING
+    """, (today, limit))
+
+    conn.commit()
+    cur.close()
+    conn.close()
+
+
+def update_profile_niches():
+    """Recalculate primary_niche for all profiles with analyzed posts."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        UPDATE profiles SET primary_niche = sub.niche
+        FROM (
+            SELECT profile_id, hook_analysis->>'niche' as niche,
+                   ROW_NUMBER() OVER (PARTITION BY profile_id ORDER BY COUNT(*) DESC) as rn
+            FROM posts
+            WHERE analyzed_at IS NOT NULL AND hook_analysis->>'niche' IS NOT NULL
+            GROUP BY profile_id, hook_analysis->>'niche'
+        ) sub
+        WHERE profiles.id = sub.profile_id AND sub.rn = 1
+    """)
+    conn.commit()
+    cur.close()
+    conn.close()
+
+
+def clean_expired_video_cache():
+    """Delete expired entries from video_url_cache."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM video_url_cache WHERE expires_at < NOW()")
     conn.commit()
     cur.close()
     conn.close()

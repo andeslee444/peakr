@@ -505,6 +505,57 @@ def scrape_and_store(username: str, headless: bool = True) -> bool:
     return True
 
 
+def scrape_hashtag_creators(hashtag: str, limit: int = 20) -> list:
+    """Scrape top creator usernames from an Instagram hashtag explore page.
+
+    Uses Camoufox to navigate to the hashtag page, extracts post owners
+    from the page source or API intercept.
+
+    Returns list of unique usernames (strings, no @ prefix).
+    """
+    hashtag = hashtag.lstrip("#")
+    url = f"https://www.instagram.com/explore/tags/{hashtag}/"
+
+    try:
+        with BrowserSession(headless=True) as bs:
+            page = bs.ctx.new_page()
+            page.goto(url, timeout=30000, wait_until="domcontentloaded")
+            time.sleep(random.uniform(3, 5))
+
+            # Strategy 1: Extract usernames from page links
+            usernames = set()
+
+            # Look for links to user profiles in the post grid
+            links = page.query_selector_all('a[href*="instagram.com/"]')
+            for link in links:
+                href = link.get_attribute("href") or ""
+                # Match profile links like /username/ (not /p/, /explore/, etc.)
+                match = re.search(r"instagram\.com/([a-zA-Z0-9._]+)/?$", href)
+                if match:
+                    uname = match.group(1)
+                    if uname not in ("explore", "p", "reel", "stories", "accounts", "tags", hashtag):
+                        usernames.add(uname)
+
+            # Strategy 2: Extract from page source JSON data
+            if len(usernames) < 5:
+                html = page.content()
+                # Look for owner usernames in embedded JSON
+                owner_matches = re.findall(r'"username"\s*:\s*"([a-zA-Z0-9._]+)"', html)
+                for uname in owner_matches:
+                    if uname not in ("instagram", hashtag):
+                        usernames.add(uname)
+
+            page.close()
+
+            result = list(usernames)[:limit]
+            log.info(f"Instagram #{hashtag}: found {len(result)} creators")
+            return result
+
+    except Exception as e:
+        log.warning(f"Error scraping Instagram #{hashtag}: {e}")
+        return []
+
+
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("Usage: python3 instagram.py <username>")
