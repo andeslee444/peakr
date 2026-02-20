@@ -5,6 +5,7 @@ import subprocess
 import tempfile
 import logging
 from pathlib import Path
+from typing import Optional
 
 log = logging.getLogger("peakr-transcribe")
 
@@ -65,7 +66,7 @@ def extract_keyframes(video_path: str, output_dir: str, duration: float = 5.0, c
     return frames
 
 
-def transcribe_audio(audio_path: str) -> str | None:
+def transcribe_audio(audio_path: str) -> Optional[str]:
     """Transcribe audio using either local Whisper or OpenAI API."""
     if WHISPER_MODE == "api":
         return _transcribe_api(audio_path)
@@ -73,7 +74,7 @@ def transcribe_audio(audio_path: str) -> str | None:
         return _transcribe_local(audio_path)
 
 
-def _transcribe_local(audio_path: str) -> str | None:
+def _transcribe_local(audio_path: str) -> Optional[str]:
     """Transcribe using local whisper CLI (free, runs on Mac Mini).
 
     Requires: pip3 install openai-whisper
@@ -113,7 +114,7 @@ def _transcribe_local(audio_path: str) -> str | None:
     return None
 
 
-def _transcribe_api(audio_path: str) -> str | None:
+def _transcribe_api(audio_path: str) -> Optional[str]:
     """Transcribe using OpenAI Whisper API ($0.006/min)."""
     import httpx
 

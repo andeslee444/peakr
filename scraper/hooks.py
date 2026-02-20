@@ -4,6 +4,7 @@ import os
 import json
 import base64
 import logging
+from typing import Optional
 import httpx
 
 log = logging.getLogger("peakr-hooks")
@@ -39,7 +40,7 @@ def analyze_hook(
     likes: int = 0,
     viral_score: float = 0,
     duration: int = 0,
-) -> dict | None:
+) -> Optional[dict]:
     """Analyze a video's hook using Claude API with vision."""
     if not ANTHROPIC_API_KEY:
         log.error("ANTHROPIC_API_KEY not set")
