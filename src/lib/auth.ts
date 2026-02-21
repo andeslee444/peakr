@@ -5,6 +5,7 @@ import bcrypt from 'bcryptjs';
 import { getPool } from './db';
 
 export const { handlers, signIn, signOut, auth } = NextAuth({
+  trustHost: true,
   providers: [
     TikTok,
     Credentials({
