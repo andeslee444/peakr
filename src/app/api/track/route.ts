@@ -69,6 +69,18 @@ export async function POST(req: NextRequest) {
       [profile.id]
     );
 
+    // Queue top 5 unanalyzed posts for hook analysis (if profile already has posts)
+    await pool.query(
+      `UPDATE posts SET hook_analysis = '{"status": "pending"}'
+       WHERE id IN (
+         SELECT id FROM posts
+         WHERE profile_id = $1 AND analyzed_at IS NULL AND (hook_analysis IS NULL OR hook_analysis = 'null')
+         ORDER BY viral_score DESC NULLS LAST
+         LIMIT 5
+       )`,
+      [profile.id]
+    );
+
     return NextResponse.json({ success: true, profile });
   } catch {
     return NextResponse.json({ error: 'Failed to track profile' }, { status: 500 });

@@ -28,6 +28,7 @@ from scraper.db import (
     get_active_profiles, pop_scrape_queue, complete_scrape_queue,
     get_active_seed_creators, get_top_seed_creators, add_profile,
     compute_daily_top_hooks, update_profile_niches, clean_expired_video_cache,
+    queue_top_posts_for_analysis,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -174,10 +175,32 @@ def run_daemon():
                     ok = scrape_one(username, platform)
                     complete_scrape_queue(queue_id, 'done' if ok else 'error')
                     log.info(f"[QUEUE] {'done' if ok else 'error'} {platform}/@{username}")
+                    # Queue top 5 posts for hook analysis after successful scrape
+                    if ok:
+                        n = queue_top_posts_for_analysis(username, platform, limit=5)
+                        if n:
+                            log.info(f"[QUEUE] Queued {n} posts for hook analysis: {platform}/@{username}")
                 except Exception as e:
                     complete_scrape_queue(queue_id, 'error')
                     log.error(f"[QUEUE] Error scraping {platform}/@{username}: {e}")
                 continue  # Check queue again immediately
+
+            # --- Fast path: analyze pending posts immediately (checked every loop) ---
+            try:
+                from scraper.analyze import analyze_post
+                from scraper.db import get_unanalyzed_viral_posts
+                pending = get_unanalyzed_viral_posts(threshold=0, limit=1)
+                # Only fast-path posts explicitly queued (priority=1 = pending status)
+                if pending and pending[0].get("priority") == 1:
+                    post = pending[0]
+                    log.info(f"[ANALYZE] Fast-path: post {post['id']} by @{post.get('username', '?')} (viral: {post.get('viral_score', 0):.1f}x)")
+                    if analyze_post(post):
+                        log.info(f"[ANALYZE] Done: post {post['id']}")
+                    else:
+                        log.warning(f"[ANALYZE] Failed: post {post['id']}")
+                    continue  # Check for more pending immediately
+            except Exception as e:
+                log.error(f"[ANALYZE] Fast-path error: {e}")
 
             # --- Scheduled: Daily top-50 seed scrape at midnight EST ---
             if hour == 0 and last_daily_top50 != today:

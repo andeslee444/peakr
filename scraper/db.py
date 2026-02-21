@@ -415,6 +415,32 @@ def complete_scrape_queue(queue_id: int, status: str = 'done'):
     conn.close()
 
 
+def queue_top_posts_for_analysis(username: str, platform: str, limit: int = 5) -> int:
+    """Queue top N unanalyzed posts for hook analysis (by viral score).
+    Used after scraping a user-tracked profile so posts appear in Hook Lab quickly.
+    Returns number of posts queued.
+    """
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        UPDATE posts SET hook_analysis = '{"status": "pending"}'
+        WHERE id IN (
+            SELECT p.id FROM posts p
+            JOIN profiles pr ON p.profile_id = pr.id
+            WHERE pr.username = %s AND pr.platform = %s
+              AND p.analyzed_at IS NULL
+              AND (p.hook_analysis IS NULL OR p.hook_analysis = 'null')
+            ORDER BY p.viral_score DESC NULLS LAST
+            LIMIT %s
+        )
+    """, (username, platform, limit))
+    queued = cur.rowcount
+    conn.commit()
+    cur.close()
+    conn.close()
+    return queued
+
+
 def get_active_seed_creators(platform: Optional[str] = None) -> list[dict]:
     """Get all active seed creators, optionally filtered by platform."""
     conn = get_conn()
