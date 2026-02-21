@@ -122,9 +122,9 @@ export default function InsightsPanel({ post, open, onClose, onPostUpdate }: Ins
         </button>
 
         {/* Thumbnail */}
-        {post.thumbnail_url && (
+        {(post.thumbnail_url || post.s3_thumbnail_url) && (
           <div className="relative aspect-video w-full bg-gradient-to-br from-purple-400 to-pink-500 overflow-hidden">
-            <Image src={proxyImg(post.thumbnail_url)!} alt="" fill className="object-cover" unoptimized />
+            <Image src={proxyImg(post.thumbnail_url, post.s3_thumbnail_url)!} alt="" fill className="object-cover" unoptimized />
             {post.post_url && (
               <a
                 href={post.post_url}

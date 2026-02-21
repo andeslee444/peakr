@@ -12,7 +12,7 @@ from curl_cffi import requests
 
 import logging
 
-from scraper.db import add_profile, update_profile, add_posts, get_profile, log_scrape
+from scraper.db import add_profile, update_profile, add_posts, get_profile, log_scrape, recalculate_viral_scores
 from scraper.proxy import get_proxy_config, is_wireproxy_running
 from scraper.utils import random_delay, save_cookies, load_cookies
 
@@ -137,12 +137,20 @@ def scrape_profile(username: str) -> dict:
     
     if videos:
         add_posts(profile_id, videos)
-    
+        recalculate_viral_scores(profile_id)
+
+        # Upload thumbnails to S3 (non-blocking — failure won't break scraping)
+        try:
+            from scraper.s3 import upload_thumbnails_for_posts
+            upload_thumbnails_for_posts(profile_id, username, "tiktok", videos)
+        except Exception as e:
+            log.warning(f"S3 thumbnail upload failed for @{username}: {e}")
+
     log_scrape(profile_id, 'success', len(videos), duration_ms=duration_ms)
-    
+
     print(f"  [✓] @{username}: {profile_data.get('followers', 0):,} followers, "
           f"{len(videos)} videos ({duration_ms}ms)")
-    
+
     return {**profile_data, 'videos': videos, 'profile_id': profile_id}
 
 
@@ -285,6 +293,7 @@ def _parse_raw_items(raw_items: list[dict], avg_views: float, username: str = ''
             'duration_seconds': video_data.get('duration', item.get('duration', 0)),
             'viral_score': viral,
             'posted_at': posted_at,
+            'is_video': True,
         })
 
     return videos
@@ -336,6 +345,7 @@ def _parse_ytdlp_items(items: list[dict], username: str) -> list[dict]:
             'duration_seconds': item.get('duration', 0),
             'viral_score': viral,
             'posted_at': posted_at,
+            'is_video': True,
         })
 
     return videos

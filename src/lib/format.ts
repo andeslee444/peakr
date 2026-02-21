@@ -10,8 +10,10 @@ export function formatViralScore(n: number | null | undefined): string {
   return n >= 10 ? Math.round(n) + 'x' : n.toFixed(1) + 'x';
 }
 
-/** Proxy Instagram CDN images through our API to avoid hotlink blocking */
-export function proxyImg(url: string | null | undefined): string | undefined {
+/** Proxy Instagram CDN images through our API to avoid hotlink blocking.
+ *  Prefers S3 URL when available (permanent, no proxying needed). */
+export function proxyImg(url: string | null | undefined, s3Url?: string | null): string | undefined {
+  if (s3Url) return s3Url;
   if (!url) return undefined;
   if (url.includes('cdninstagram') || url.includes('instagram')) {
     return `/api/image-proxy?url=${encodeURIComponent(url)}`;

@@ -72,6 +72,7 @@ async function initSchema() {
       transcript TEXT,
       hook_analysis JSONB,
       analyzed_at TIMESTAMPTZ,
+      s3_thumbnail_url TEXT,
       UNIQUE(profile_id, platform_id)
     );
 
@@ -109,6 +110,8 @@ async function initSchema() {
     ALTER TABLE posts ADD COLUMN IF NOT EXISTS analyzed_at TIMESTAMPTZ;
     ALTER TABLE profiles ADD COLUMN IF NOT EXISTS primary_niche TEXT;
     ALTER TABLE posts ADD COLUMN IF NOT EXISTS keyframe_base64 TEXT;
+    ALTER TABLE posts ADD COLUMN IF NOT EXISTS s3_thumbnail_url TEXT;
+    ALTER TABLE creator_profiles ADD COLUMN IF NOT EXISTS content_topics TEXT;
   `);
   // Video URL cache for hover-to-play
   await pool.query(`
@@ -183,6 +186,18 @@ async function initSchema() {
       generated_at TIMESTAMPTZ,
       updated_at TIMESTAMPTZ DEFAULT NOW()
     );
+
+    CREATE TABLE IF NOT EXISTS user_tracked_profiles (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+      tracked_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(user_id, profile_id)
+    );
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_utp_user_id ON user_tracked_profiles(user_id);
+    CREATE INDEX IF NOT EXISTS idx_utp_profile_id ON user_tracked_profiles(profile_id);
   `);
   // Deduplicate saved_posts and add unique constraint if missing
   await pool.query(`

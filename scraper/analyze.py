@@ -24,7 +24,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 log = logging.getLogger("peakr-analyze")
 
 # Max videos to analyze per account (auto-analysis only)
-MAX_PER_ACCOUNT = 8
+MAX_PER_ACCOUNT = 20
 
 
 def analyze_post(post: dict) -> bool:
@@ -50,30 +50,38 @@ def analyze_post(post: dict) -> bool:
         frames_dir = os.path.join(tmpdir, "frames")
         os.makedirs(frames_dir, exist_ok=True)
 
-        # 1. Download video
+        # 1. Try to download video (optional — analysis works text-only too)
+        transcript = None
+        keyframes = []
+        keyframe_b64 = None
+
         log.info(f"[{username}] Downloading post {post_id}...")
-        if not download_video(post_url, video_path):
-            log.error(f"Failed to download post {post_id}")
-            return False
+        video_ok = download_video(post_url, video_path)
 
-        # 2. Extract audio
-        log.info(f"[{username}] Extracting audio...")
-        if not extract_audio(video_path, audio_path):
-            log.warning(f"Audio extraction failed for post {post_id}, continuing without transcript")
-            transcript = None
+        if video_ok:
+            # 2. Extract audio
+            log.info(f"[{username}] Extracting audio...")
+            if extract_audio(video_path, audio_path):
+                # 3. Transcribe
+                log.info(f"[{username}] Transcribing...")
+                transcript = transcribe_audio(audio_path)
+
+            # 4. Extract keyframes
+            log.info(f"[{username}] Extracting keyframes...")
+            keyframes = extract_keyframes(video_path, frames_dir)
+
+            # Encode first keyframe as base64
+            if keyframes:
+                try:
+                    with open(keyframes[0], "rb") as f:
+                        keyframe_b64 = base64.standard_b64encode(f.read()).decode("utf-8")
+                except Exception as e:
+                    log.warning(f"Could not encode keyframe for post {post_id}: {e}")
         else:
-            # 3. Transcribe
-            log.info(f"[{username}] Transcribing...")
-            transcript = transcribe_audio(audio_path)
+            log.warning(f"Video download failed for post {post_id}, proceeding with text-only analysis")
 
-        # 4. Extract keyframes
-        log.info(f"[{username}] Extracting keyframes...")
-        keyframes = extract_keyframes(video_path, frames_dir)
-        if not keyframes:
-            log.warning(f"No keyframes extracted for post {post_id}")
-
-        # 5. Claude analysis
-        log.info(f"[{username}] Analyzing hook with Claude...")
+        # 5. Claude analysis (works with just description + transcript if available)
+        log.info(f"[{username}] Analyzing hook via OpenClaw...")
         analysis = analyze_hook(
             transcript=transcript or "",
             keyframe_paths=keyframes,
@@ -87,15 +95,6 @@ def analyze_post(post: dict) -> bool:
         if not analysis:
             log.error(f"Hook analysis failed for post {post_id}")
             return False
-
-        # 6. Encode first keyframe as base64
-        keyframe_b64 = None
-        if keyframes:
-            try:
-                with open(keyframes[0], "rb") as f:
-                    keyframe_b64 = base64.standard_b64encode(f.read()).decode("utf-8")
-            except Exception as e:
-                log.warning(f"Could not encode keyframe for post {post_id}: {e}")
 
         # 7. Save to DB
         save_hook_analysis(post_id, transcript or "", analysis, keyframe_base64=keyframe_b64)

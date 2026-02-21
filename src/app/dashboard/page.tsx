@@ -3,8 +3,9 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
-import { formatNumber, proxyImg } from '@/lib/format';
-import type { Profile } from '@/lib/types';
+import { formatNumber, formatViralScore, proxyImg } from '@/lib/format';
+import type { Profile, Post } from '@/lib/types';
+import VideoHover from '@/components/VideoHover';
 
 export default function DashboardPage() {
   const [profiles, setProfiles] = useState<Profile[]>([]);
@@ -13,6 +14,12 @@ export default function DashboardPage() {
   const [trackUsername, setTrackUsername] = useState('');
   const [trackPlatform, setTrackPlatform] = useState<'instagram' | 'tiktok'>('instagram');
   const [trackStatus, setTrackStatus] = useState<{ type: 'idle' | 'loading' | 'success' | 'error'; message?: string }>({ type: 'idle' });
+  const [showAllProfiles, setShowAllProfiles] = useState(false);
+
+  // Tracked posts state
+  const [trackedPosts, setTrackedPosts] = useState<Post[]>([]);
+  const [postsLoading, setPostsLoading] = useState(false);
+  const [postsTotal, setPostsTotal] = useState(0);
 
   // Autocomplete state
   const [searchResults, setSearchResults] = useState<{ username: string; display_name: string; avatar_url: string; followers: number; post_count: number; verified: boolean; is_tracked: boolean }[]>([]);
@@ -82,7 +89,26 @@ export default function DashboardPage() {
     }
   }, [selectedPlatform]);
 
+  const fetchTrackedPosts = useCallback(async (offset = 0) => {
+    setPostsLoading(true);
+    try {
+      const res = await fetch(`/api/tracked-posts?platform=${selectedPlatform}&limit=24&offset=${offset}`);
+      const data = await res.json();
+      if (offset === 0) {
+        setTrackedPosts(data.posts || []);
+      } else {
+        setTrackedPosts(prev => [...prev, ...(data.posts || [])]);
+      }
+      setPostsTotal(data.total || 0);
+    } catch {
+      if (offset === 0) setTrackedPosts([]);
+    } finally {
+      setPostsLoading(false);
+    }
+  }, [selectedPlatform]);
+
   useEffect(() => { fetchData(); }, [fetchData]);
+  useEffect(() => { fetchTrackedPosts(0); }, [fetchTrackedPosts]);
 
   const trackUser = async () => {
     const clean = trackUsername.replace(/^@/, '').trim();
@@ -113,6 +139,7 @@ export default function DashboardPage() {
         setTrackStatus({ type: 'success', message: `Successfully tracking @${clean}!` });
         setTrackUsername('');
         await fetchData();
+        fetchTrackedPosts(0);
       }
     } catch {
       setTrackStatus({ type: 'error', message: 'Network error. Please try again.' });
@@ -126,7 +153,10 @@ export default function DashboardPage() {
       method: 'DELETE',
     });
     fetchData();
+    fetchTrackedPosts(0);
   };
+
+  const visibleProfiles = showAllProfiles ? profiles : profiles.slice(0, 5);
 
   return (
     <div className="space-y-6">
@@ -193,6 +223,7 @@ export default function DashboardPage() {
                                 setTrackStatus({ type: 'success', message: `Successfully tracking @${clean}!` });
                                 setTrackUsername('');
                                 fetchData();
+                                fetchTrackedPosts(0);
                               } else {
                                 setTrackStatus({ type: 'error', message: data.error || 'Failed to track profile' });
                               }
@@ -206,7 +237,7 @@ export default function DashboardPage() {
                         {result.avatar_url ? (
                           <Image src={proxyImg(result.avatar_url)!} alt="" fill className="object-cover" unoptimized />
                         ) : (
-                          <span className="text-white">👤</span>
+                          <span className="text-white">&#x1F464;</span>
                         )}
                       </div>
                       <div className="flex-1 min-w-0">
@@ -272,48 +303,139 @@ export default function DashboardPage() {
           </div>
         )}
 
+        {/* Account rows */}
         {loading ? (
           <div className="text-center py-4 text-gray-500">Loading...</div>
         ) : profiles.length === 0 ? (
           <p className="text-gray-500 text-center py-4">No tracked accounts yet. Add a username above to get started.</p>
         ) : (
-          <div className="flex gap-4 overflow-x-auto pb-2">
-            {profiles.map(account => (
-              <div key={account.id} className="relative flex-shrink-0 bg-gray-50 rounded-xl p-4 min-w-[180px] hover:bg-gray-100 transition-colors group">
-                <button
-                  onClick={() => untrackUser(account.username, account.platform)}
-                  className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity text-gray-400 hover:text-red-500 p-1"
-                  title="Untrack"
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
-                <div className="flex items-center space-x-3">
-                  <div className="relative w-12 h-12 rounded-full bg-gradient-to-br from-purple-400 to-pink-500 flex items-center justify-center text-2xl overflow-hidden">
+          <div>
+            <div className="divide-y divide-gray-100">
+              {visibleProfiles.map(account => (
+                <div key={account.id} className="flex items-center gap-3 py-2.5 group hover:bg-gray-50 -mx-2 px-2 rounded-lg transition-colors">
+                  {/* Avatar */}
+                  <div className="relative w-8 h-8 rounded-full bg-gradient-to-br from-purple-400 to-pink-500 flex-shrink-0 overflow-hidden flex items-center justify-center">
                     {account.avatar_url ? (
                       <Image src={proxyImg(account.avatar_url)!} alt="" fill className="object-cover" unoptimized />
                     ) : (
-                      '👤'
+                      <span className="text-white text-xs">&#x1F464;</span>
                     )}
                   </div>
-                  <div>
-                    <div className="flex items-center space-x-1">
-                      <span className="text-xs">{account.platform === 'instagram' ? '📸' : '🎵'}</span>
-                      <p className="font-medium text-gray-900 text-sm">@{account.username}</p>
-                    </div>
-                    <p className="text-xs text-gray-500">
-                      {(account.post_count_actual ?? 0) > 0 ? `${account.post_count_actual} posts` : (account.followers ?? 0) > 0 ? `${formatNumber(account.followers)} followers` : '0 posts'}
-                      {' • '}
-                      {formatNumber(Math.round(account.avg_views_calc || 0))} avg
-                    </p>
+
+                  {/* Platform emoji */}
+                  <span className="text-sm flex-shrink-0">{account.platform === 'instagram' ? '📸' : '🎵'}</span>
+
+                  {/* Username + display name */}
+                  <div className="flex-1 min-w-0">
+                    <span className="font-medium text-gray-900 text-sm">@{account.username}</span>
+                    {account.display_name && (
+                      <span className="text-xs text-gray-400 ml-1.5 hidden sm:inline">{account.display_name}</span>
+                    )}
                   </div>
+
+                  {/* Stats */}
+                  <span className="text-xs text-gray-500 hidden sm:inline">{formatNumber(account.followers)} followers</span>
+                  <span className="text-xs text-gray-500 hidden md:inline">{account.post_count_actual ?? account.post_count} posts</span>
+                  <span className="text-xs text-gray-500 hidden md:inline">{formatNumber(Math.round(account.avg_views_calc || account.avg_views || 0))} avg</span>
+
+                  {/* Untrack button */}
+                  <button
+                    onClick={() => untrackUser(account.username, account.platform)}
+                    className="opacity-0 group-hover:opacity-100 transition-opacity text-gray-400 hover:text-red-500 p-1 flex-shrink-0"
+                    title="Untrack"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
                 </div>
-              </div>
-            ))}
+              ))}
+            </div>
+
+            {profiles.length > 5 && (
+              <button
+                onClick={() => setShowAllProfiles(!showAllProfiles)}
+                className="mt-2 text-sm text-indigo-600 hover:text-indigo-800 font-medium"
+              >
+                {showAllProfiles ? 'Show less' : `Show all (${profiles.length})`}
+              </button>
+            )}
           </div>
         )}
       </div>
+
+      {/* Posts from tracked accounts */}
+      {profiles.length > 0 && (
+        <div className="bg-white rounded-2xl p-6 card-shadow">
+          <h2 className="text-lg font-semibold text-gray-900 mb-4">Posts from Tracked Accounts</h2>
+
+          {postsLoading && trackedPosts.length === 0 ? (
+            <div className="text-center py-8 text-gray-500">Loading posts...</div>
+          ) : trackedPosts.length === 0 ? (
+            <p className="text-gray-500 text-center py-8">No posts yet. Posts will appear after your tracked accounts are scraped.</p>
+          ) : (
+            <>
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
+                {trackedPosts.map(post => (
+                  <div
+                    key={post.id}
+                    className="group cursor-pointer"
+                    onClick={() => post.post_url && window.open(post.post_url, '_blank')}
+                  >
+                    {/* Thumbnail */}
+                    <div className="relative aspect-[9/16] rounded-xl overflow-hidden bg-gray-100 flex items-center justify-center">
+                      <VideoHover
+                        thumbnailUrl={post.thumbnail_url}
+                        s3ThumbnailUrl={post.s3_thumbnail_url}
+                        postUrl={post.post_url}
+                        isVideo={post.is_video}
+                      />
+                      {/* Viral score badge */}
+                      {post.viral_score > 0 && (
+                        <div className="absolute top-1.5 left-1.5 bg-black/60 text-white text-xs font-bold px-1.5 py-0.5 rounded-md z-20">
+                          {formatViralScore(post.viral_score)}
+                        </div>
+                      )}
+                      {/* Views badge */}
+                      {post.views > 0 && (
+                        <div className="absolute bottom-1.5 right-1.5 bg-black/60 text-white text-xs px-1.5 py-0.5 rounded-md z-20 flex items-center gap-0.5">
+                          <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+                            <path d="M10 12a2 2 0 100-4 2 2 0 000 4z" />
+                            <path fillRule="evenodd" d="M.458 10C1.732 5.943 5.522 3 10 3s8.268 2.943 9.542 7c-1.274 4.057-5.064 7-9.542 7S1.732 14.057.458 10zM14 10a4 4 0 11-8 0 4 4 0 018 0z" clipRule="evenodd" />
+                          </svg>
+                          {formatNumber(post.views)}
+                        </div>
+                      )}
+                    </div>
+                    {/* Post info */}
+                    <div className="mt-1.5 px-0.5">
+                      <div className="flex items-center gap-1 text-xs text-gray-500">
+                        <span className="font-medium text-gray-700 truncate">@{post.username}</span>
+                      </div>
+                      <div className="flex items-center gap-2 text-xs text-gray-400 mt-0.5">
+                        <span>{formatNumber(post.likes)} likes</span>
+                        <span>{formatNumber(post.comments)} comments</span>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {trackedPosts.length < postsTotal && (
+                <div className="text-center mt-4">
+                  <button
+                    onClick={() => fetchTrackedPosts(trackedPosts.length)}
+                    disabled={postsLoading}
+                    className="px-5 py-2 text-sm bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors font-medium disabled:opacity-50"
+                  >
+                    {postsLoading ? 'Loading...' : `Load more (${trackedPosts.length} of ${postsTotal})`}
+                  </button>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
 
       {/* Hook Lab CTA */}
       <div className="bg-gradient-to-r from-indigo-500 to-purple-500 rounded-2xl p-6 text-white">

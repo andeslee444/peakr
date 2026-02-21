@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS posts (
   transcript TEXT,
   hook_analysis JSONB,
   analyzed_at TIMESTAMPTZ,
+  s3_thumbnail_url TEXT,
   UNIQUE(profile_id, platform_id)
 );
 
@@ -146,6 +147,14 @@ CREATE TABLE IF NOT EXISTS playbook_sections (
   generated_at TIMESTAMPTZ,
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+CREATE TABLE IF NOT EXISTS user_tracked_profiles (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  tracked_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(user_id, profile_id)
+);
 """
 
 
@@ -233,7 +242,8 @@ def add_posts(profile_id: int, posts: list[dict]):
                 views=EXCLUDED.views, likes=EXCLUDED.likes, comments=EXCLUDED.comments,
                 shares=EXCLUDED.shares, viral_score=EXCLUDED.viral_score, scraped_at=EXCLUDED.scraped_at,
                 thumbnail_url=EXCLUDED.thumbnail_url, description=EXCLUDED.description,
-                is_video=EXCLUDED.is_video
+                is_video=EXCLUDED.is_video, duration_seconds=EXCLUDED.duration_seconds,
+                post_url=EXCLUDED.post_url
         """, (
             profile_id, p.get('platform_id', ''), p.get('post_url', ''),
             p.get('thumbnail_url', ''), p.get('description', ''),
@@ -296,6 +306,8 @@ def migrate_hook_columns():
         cur.execute(f"ALTER TABLE posts ADD COLUMN IF NOT EXISTS {col} {typ}")
     cur.execute("ALTER TABLE profiles ADD COLUMN IF NOT EXISTS primary_niche TEXT")
     cur.execute("ALTER TABLE posts ADD COLUMN IF NOT EXISTS keyframe_base64 TEXT")
+    cur.execute("ALTER TABLE posts ADD COLUMN IF NOT EXISTS s3_thumbnail_url TEXT")
+    cur.execute("ALTER TABLE creator_profiles ADD COLUMN IF NOT EXISTS content_topics TEXT")
     cur.execute("""
         CREATE TABLE IF NOT EXISTS video_url_cache (
             id SERIAL PRIMARY KEY,
@@ -327,7 +339,6 @@ def get_unanalyzed_viral_posts(threshold: float = 1.5, limit: int = 10) -> list[
          FROM posts p JOIN profiles pr ON p.profile_id = pr.id
          WHERE p.viral_score >= %s AND p.analyzed_at IS NULL
                AND (p.hook_analysis IS NULL OR p.hook_analysis != '{"status": "pending"}')
-               AND p.is_video = TRUE
          ORDER BY p.viral_score DESC LIMIT %s)
         ORDER BY priority, viral_score DESC
         LIMIT %s
@@ -507,6 +518,41 @@ def clean_expired_video_cache():
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("DELETE FROM video_url_cache WHERE expires_at < NOW()")
+    conn.commit()
+    cur.close()
+    conn.close()
+
+
+def get_active_profiles() -> list[dict]:
+    """Get profiles that are seed creators or tracked by at least one user."""
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute("""
+        SELECT DISTINCT pr.* FROM profiles pr
+        WHERE EXISTS (
+            SELECT 1 FROM seed_creators sc
+            WHERE sc.username = pr.username AND sc.platform = pr.platform AND sc.is_active = TRUE
+        )
+        OR EXISTS (
+            SELECT 1 FROM user_tracked_profiles utp WHERE utp.profile_id = pr.id
+        )
+        ORDER BY pr.last_scraped_at ASC NULLS FIRST
+    """)
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def recalculate_viral_scores(profile_id: int):
+    """Recalculate viral_score for ALL posts of a profile based on avg engagement."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        UPDATE posts SET viral_score = ROUND(((likes + comments)::numeric / avg_eng), 2)
+        FROM (SELECT AVG(likes + comments) AS avg_eng FROM posts WHERE profile_id = %s AND (likes + comments) > 0) sub
+        WHERE profile_id = %s AND (likes + comments) > 0 AND sub.avg_eng > 0
+    """, (profile_id, profile_id))
     conn.commit()
     cur.close()
     conn.close()

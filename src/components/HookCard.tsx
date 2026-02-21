@@ -60,6 +60,7 @@ export default function HookCard({ post, flipped: controlledFlip, isSaved, isHoo
           >
             <VideoHover
               thumbnailUrl={post.thumbnail_url}
+              s3ThumbnailUrl={post.s3_thumbnail_url}
               postUrl={post.post_url}
               isVideo={post.is_video}
               fallbackEmoji={post.platform === 'instagram' ? '📸' : '🎵'}

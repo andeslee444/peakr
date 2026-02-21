@@ -21,6 +21,12 @@ export async function GET(request: NextRequest) {
     const params: (string | number)[] = [];
     let paramIndex = 1;
 
+    // Only show posts from seed creators or user-tracked profiles
+    conditions.push(`(
+      EXISTS (SELECT 1 FROM seed_creators sc WHERE sc.username = pr.username AND sc.platform = pr.platform AND sc.is_active = TRUE)
+      OR EXISTS (SELECT 1 FROM user_tracked_profiles utp WHERE utp.profile_id = pr.id)
+    )`);
+
     if (analyzedOnly) {
       conditions.push('p.analyzed_at IS NOT NULL');
     }

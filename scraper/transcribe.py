@@ -13,11 +13,39 @@ log = logging.getLogger("peakr-transcribe")
 WHISPER_MODE = os.environ.get("WHISPER_MODE", "local")
 
 
+def _get_cookie_file() -> Optional[str]:
+    """Convert Instagram cookies to Netscape format for yt-dlp."""
+    cookie_json = Path(__file__).parent.parent / "data" / "cookies" / "instagram.json"
+    cookie_txt = Path(__file__).parent.parent / "data" / "cookies" / "instagram_netscape.txt"
+    if not cookie_json.exists():
+        return None
+    try:
+        import json
+        cookies = json.loads(cookie_json.read_text())
+        lines = ["# Netscape HTTP Cookie File"]
+        for c in cookies:
+            domain = c.get("domain", "")
+            flag = "TRUE" if domain.startswith(".") else "FALSE"
+            path = c.get("path", "/")
+            secure = "TRUE" if c.get("secure") else "FALSE"
+            expires = str(int(c.get("expires", 0)))
+            lines.append(f"{domain}\t{flag}\t{path}\t{secure}\t{expires}\t{c['name']}\t{c.get('value', '')}")
+        cookie_txt.write_text("\n".join(lines) + "\n")
+        return str(cookie_txt)
+    except Exception:
+        return None
+
+
 def download_video(post_url: str, output_path: str) -> bool:
     """Download a video using yt-dlp. Returns True on success."""
     try:
+        cmd = ["yt-dlp", "-o", output_path, "--no-playlist"]
+        cookie_file = _get_cookie_file()
+        if cookie_file:
+            cmd.extend(["--cookies", cookie_file])
+        cmd.append(post_url)
         result = subprocess.run(
-            ["yt-dlp", "-o", output_path, "--no-playlist", post_url],
+            cmd,
             capture_output=True, text=True, timeout=120
         )
         if result.returncode != 0:

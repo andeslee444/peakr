@@ -25,7 +25,7 @@ from zoneinfo import ZoneInfo
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from scraper.db import (
-    get_all_profiles, pop_scrape_queue, complete_scrape_queue,
+    get_active_profiles, pop_scrape_queue, complete_scrape_queue,
     get_active_seed_creators, get_top_seed_creators, add_profile,
     compute_daily_top_hooks, update_profile_niches, clean_expired_video_cache,
 )
@@ -224,7 +224,7 @@ def run_daemon():
 
             # --- Slow path: refresh stale user-tracked profiles (every 60s) ---
             if time.time() - last_refresh > 60:
-                all_profiles = get_all_profiles()
+                all_profiles = get_active_profiles()
                 if all_profiles:
                     cutoff = datetime.utcnow() - timedelta(seconds=REFRESH_INTERVAL)
 

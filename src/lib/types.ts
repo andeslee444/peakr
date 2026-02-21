@@ -40,6 +40,7 @@ export interface Post {
   platform: string;
   avatar_url: string | null;
   thumbnail_url: string | null;
+  s3_thumbnail_url: string | null;
   post_url: string | null;
   description: string | null;
   views: number;
@@ -70,6 +71,7 @@ export interface SavedPost {
   shares: number;
   viral_score: number;
   thumbnail_url: string | null;
+  s3_thumbnail_url: string | null;
   post_url: string | null;
   description: string | null;
   posted_at: string | null;

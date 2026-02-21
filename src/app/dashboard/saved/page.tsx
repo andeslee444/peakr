@@ -202,8 +202,8 @@ export default function SavedPage() {
                 className="relative aspect-[9/16] bg-gradient-to-br from-purple-400 to-pink-500 flex items-center justify-center overflow-hidden cursor-pointer"
                 onClick={() => item.post_url && window.open(item.post_url, '_blank')}
               >
-                {item.thumbnail_url ? (
-                  <Image src={proxyImg(item.thumbnail_url)!} alt="" fill className="object-cover" unoptimized />
+                {item.thumbnail_url || item.s3_thumbnail_url ? (
+                  <Image src={proxyImg(item.thumbnail_url, item.s3_thumbnail_url)!} alt="" fill className="object-cover" unoptimized />
                 ) : (
                   <span className="text-6xl">{item.platform === 'instagram' ? '📸' : '🎵'}</span>
                 )}

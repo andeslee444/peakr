@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { auth } from '@/lib/auth';
 import { getPool } from '@/lib/db';
 
 export async function GET(
@@ -36,28 +37,29 @@ export async function DELETE(
   { params }: { params: Promise<{ username: string }> }
 ) {
   try {
+    const session = await auth();
+    if (!session?.user?.id) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    const userId = Number(session.user.id);
+
     const { username } = await params;
     const { searchParams } = new URL(request.url);
     const platform = searchParams.get('platform') || 'instagram';
 
     const pool = getPool();
-    const { rows: [profile] } = await pool.query(
-      'SELECT id FROM profiles WHERE username = $1 AND platform = $2',
-      [username, platform]
+
+    // Remove just the user-profile link; profile and posts remain for others / Hook Lab
+    await pool.query(
+      `DELETE FROM user_tracked_profiles
+       WHERE user_id = $1 AND profile_id = (
+         SELECT id FROM profiles WHERE username = $2 AND platform = $3
+       )`,
+      [userId, username, platform]
     );
-
-    if (!profile) {
-      return NextResponse.json({ error: 'Profile not found' }, { status: 404 });
-    }
-
-    await pool.query('DELETE FROM saved_posts WHERE post_id IN (SELECT id FROM posts WHERE profile_id = $1)', [profile.id]);
-    await pool.query('DELETE FROM scrape_queue WHERE profile_id = $1', [profile.id]);
-    await pool.query('DELETE FROM scrape_log WHERE profile_id = $1', [profile.id]);
-    await pool.query('DELETE FROM posts WHERE profile_id = $1', [profile.id]);
-    await pool.query('DELETE FROM profiles WHERE id = $1', [profile.id]);
 
     return NextResponse.json({ ok: true });
   } catch {
-    return NextResponse.json({ error: 'Failed to delete profile' }, { status: 500 });
+    return NextResponse.json({ error: 'Failed to untrack profile' }, { status: 500 });
   }
 }

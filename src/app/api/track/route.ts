@@ -1,10 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { auth } from '@/lib/auth';
 import { getPool } from '@/lib/db';
 
 const USERNAME_RE = /^[a-zA-Z0-9_.]{1,30}$/;
 
 export async function POST(req: NextRequest) {
   try {
+    const session = await auth();
+    if (!session?.user?.id) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    const userId = Number(session.user.id);
+
     const { username, platform = 'tiktok', display_name, avatar_url, followers, post_count } = await req.json();
     if (!username) {
       return NextResponse.json({ error: 'username required' }, { status: 400 });
@@ -45,6 +52,13 @@ export async function POST(req: NextRequest) {
         { status: 404 }
       );
     }
+
+    // Link this user to the profile
+    await pool.query(
+      `INSERT INTO user_tracked_profiles (user_id, profile_id)
+       VALUES ($1, $2) ON CONFLICT (user_id, profile_id) DO NOTHING`,
+      [userId, profile.id]
+    );
 
     // Enqueue for immediate scraping by the daemon (skip if already pending/in_progress)
     await pool.query(

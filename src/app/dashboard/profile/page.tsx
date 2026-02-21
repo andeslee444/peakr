@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 
 const NICHES = [
   'fitness', 'finance', 'business', 'beauty', 'food', 'comedy',
@@ -12,11 +12,21 @@ const CONTENT_STYLES = [
   'educational', 'entertaining', 'storytelling', 'motivational', 'mixed',
 ];
 
+function getFallbackQuestions(niche: string, contentStyle: string): string[] {
+  const nicheLabel = niche || 'your field';
+  return [
+    `What makes you the right person to talk about ${nicheLabel}? (doesn't have to be formal — life experience counts!)`,
+    `What's a story or moment from your ${contentStyle || ''} journey that your audience would relate to?`,
+    `What do you wish more people understood about ${nicheLabel}?`,
+  ];
+}
+
 interface CreatorProfile {
   niche: string | null;
   content_style: string | null;
   target_audience: string | null;
   unique_angle: string | null;
+  content_topics: string | null;
   platforms: string[] | string | null;
   inspiration_creators: string[] | string | null;
   background_qa: { q: string; a: string }[] | string | null;
@@ -36,6 +46,7 @@ export default function ProfilePage() {
   const [contentStyle, setContentStyle] = useState('');
   const [targetAudience, setTargetAudience] = useState('');
   const [uniqueAngle, setUniqueAngle] = useState('');
+  const [contentTopics, setContentTopics] = useState('');
   const [platforms, setPlatforms] = useState<string[]>([]);
   const [inspirationCreators, setInspirationCreators] = useState('');
 
@@ -43,6 +54,43 @@ export default function ProfilePage() {
   const [questions, setQuestions] = useState<string[]>([]);
   const [answers, setAnswers] = useState<string[]>([]);
   const [generatingQuestions, setGeneratingQuestions] = useState(false);
+  const [questionError, setQuestionError] = useState(false);
+
+  // Typewriter effect state
+  const [revealedChars, setRevealedChars] = useState<number[]>([]);
+  const [typingDone, setTypingDone] = useState(false);
+  const shouldTypewrite = useRef(false);
+
+  // Drive typewriter animation
+  useEffect(() => {
+    if (!shouldTypewrite.current || questions.length === 0 || typingDone) return;
+
+    // Initialize revealed chars to 0 for each question
+    if (revealedChars.length !== questions.length) {
+      setRevealedChars(new Array(questions.length).fill(0));
+      return;
+    }
+
+    // Find the current question being typed
+    const currentQ = revealedChars.findIndex((chars, i) => chars < questions[i].length);
+    if (currentQ === -1) {
+      // All questions fully revealed
+      setTypingDone(true);
+      shouldTypewrite.current = false;
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      setRevealedChars(prev => {
+        const next = [...prev];
+        // Type 2-3 chars at a time for faster speed
+        next[currentQ] = Math.min(prev[currentQ] + 2 + Math.floor(Math.random() * 2), questions[currentQ].length);
+        return next;
+      });
+    }, 12 + Math.random() * 8); // 12-20ms per tick, typing 2-3 chars each
+
+    return () => clearTimeout(timer);
+  }, [questions, revealedChars, typingDone]);
 
   const fetchProfile = useCallback(async () => {
     try {
@@ -55,6 +103,7 @@ export default function ProfilePage() {
         setContentStyle(p.content_style || '');
         setTargetAudience(p.target_audience || '');
         setUniqueAngle(p.unique_angle || '');
+        setContentTopics(p.content_topics || '');
 
         const parsedPlatforms = typeof p.platforms === 'string' ? JSON.parse(p.platforms) : p.platforms;
         setPlatforms(parsedPlatforms || []);
@@ -103,27 +152,36 @@ export default function ProfilePage() {
     }
   };
 
+  const submittingRound1 = useRef(false);
+
   const handleRound1Submit = async () => {
+    if (submittingRound1.current) return; // prevent double-click
+    submittingRound1.current = true;
+
     const effectiveNiche = niche === 'other' ? customNiche : niche;
     const inspoArray = inspirationCreators
       .split(',')
       .map(s => s.trim())
       .filter(Boolean);
 
-    await saveProfile({
-      niche: effectiveNiche,
-      content_style: contentStyle,
-      target_audience: targetAudience,
-      unique_angle: uniqueAngle,
-      platforms,
-      inspiration_creators: inspoArray,
-      onboarding_step: 'round2',
-    });
-
-    // Generate Round 2 questions
+    // Immediately go to Round 2 with loading spinner
     setGeneratingQuestions(true);
-    try {
-      const res = await fetch('/api/creator-profile/questions', {
+    setQuestionError(false);
+    setStep('round2');
+
+    // Save profile and generate questions in parallel
+    const [, questionsResult] = await Promise.all([
+      saveProfile({
+        niche: effectiveNiche,
+        content_style: contentStyle,
+        target_audience: targetAudience,
+        unique_angle: uniqueAngle,
+        content_topics: contentTopics,
+        platforms,
+        inspiration_creators: inspoArray,
+        onboarding_step: 'round2',
+      }),
+      fetch('/api/creator-profile/questions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -131,20 +189,32 @@ export default function ProfilePage() {
           content_style: contentStyle,
           target_audience: targetAudience,
           unique_angle: uniqueAngle,
+          content_topics: contentTopics,
         }),
-      });
-      const data = await res.json();
-      if (data.questions) {
-        setQuestions(data.questions);
-        setAnswers(new Array(data.questions.length).fill(''));
-      }
-    } catch (e) {
-      console.error('Failed to generate questions:', e);
-    } finally {
-      setGeneratingQuestions(false);
+      }).then(r => r.json()).catch(() => null),
+    ]);
+
+    let gotQuestions = false;
+    if (questionsResult?.questions?.length > 0) {
+      setQuestions(questionsResult.questions);
+      setAnswers(new Array(questionsResult.questions.length).fill(''));
+      gotQuestions = true;
     }
 
-    setStep('round2');
+    // Fallback: if AI didn't return questions, use smart defaults
+    if (!gotQuestions) {
+      const fallback = getFallbackQuestions(effectiveNiche, contentStyle);
+      setQuestions(fallback);
+      setAnswers(new Array(fallback.length).fill(''));
+      setQuestionError(true);
+    }
+
+    setGeneratingQuestions(false);
+    // Trigger typewriter effect for fresh questions
+    shouldTypewrite.current = true;
+    setTypingDone(false);
+    setRevealedChars([]);
+    submittingRound1.current = false;
   };
 
   const handleRound2Submit = async () => {
@@ -220,10 +290,19 @@ export default function ProfilePage() {
             </div>
           </div>
 
-          <div>
-            <p className="text-sm text-gray-500">Unique Angle</p>
-            <p className="font-medium text-gray-900">{profile?.unique_angle || uniqueAngle}</p>
-          </div>
+          {(profile?.unique_angle || uniqueAngle) && (
+            <div>
+              <p className="text-sm text-gray-500">Unique Angle</p>
+              <p className="font-medium text-gray-900">{profile?.unique_angle || uniqueAngle}</p>
+            </div>
+          )}
+
+          {(profile?.content_topics || contentTopics) && (
+            <div>
+              <p className="text-sm text-gray-500">Content Topics</p>
+              <p className="font-medium text-gray-900">{profile?.content_topics || contentTopics}</p>
+            </div>
+          )}
 
           {parsedQA && parsedQA.length > 0 && (
             <div className="border-t pt-6">
@@ -245,7 +324,7 @@ export default function ProfilePage() {
               className="inline-flex items-center gap-2 px-6 py-3 bg-indigo-600 text-white rounded-xl font-semibold hover:bg-indigo-700 transition-colors"
             >
               View Your Playbook
-              <span>→</span>
+              <span>&rarr;</span>
             </a>
           </div>
         </div>
@@ -269,26 +348,66 @@ export default function ProfilePage() {
           </div>
         ) : (
           <div className="bg-white rounded-2xl border border-gray-200 p-6 space-y-6">
-            {questions.map((q, i) => (
-              <div key={i}>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  {q}
-                </label>
-                <textarea
-                  value={answers[i] || ''}
-                  onChange={(e) => {
-                    const newAnswers = [...answers];
-                    newAnswers[i] = e.target.value;
-                    setAnswers(newAnswers);
-                  }}
-                  rows={3}
-                  className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 resize-none text-gray-900"
-                  placeholder="Your answer..."
-                />
+            {questionError && (
+              <div className="text-sm text-amber-600 bg-amber-50 px-4 py-2 rounded-lg">
+                We couldn&apos;t generate AI-tailored questions right now, but these defaults will still help personalize your playbook.
               </div>
-            ))}
+            )}
 
-            <div className="flex items-center gap-3 pt-2">
+            {questions.map((q, i) => {
+              const isTypewriting = shouldTypewrite.current && !typingDone;
+              const chars = revealedChars[i] ?? q.length;
+              const fullyRevealed = chars >= q.length;
+              const isCurrentlyTyping = isTypewriting && !fullyRevealed && (i === 0 || (revealedChars[i - 1] ?? 0) >= questions[i - 1].length);
+              const hasStarted = !isTypewriting || chars > 0 || i === 0 || (revealedChars[i - 1] ?? 0) >= questions[i - 1].length;
+
+              if (!hasStarted && isTypewriting) return null;
+
+              return (
+                <div
+                  key={i}
+                  className="transition-opacity duration-300"
+                  style={{ opacity: hasStarted ? 1 : 0 }}
+                >
+                  <label className="block text-sm font-medium text-gray-700 mb-2 min-h-[1.25rem]">
+                    {isTypewriting ? (
+                      <>
+                        {q.slice(0, chars)}
+                        {isCurrentlyTyping && (
+                          <span className="inline-block w-0.5 h-4 bg-indigo-500 ml-0.5 animate-pulse align-text-bottom" />
+                        )}
+                      </>
+                    ) : (
+                      q
+                    )}
+                  </label>
+                  <div
+                    className="transition-all duration-500 overflow-hidden"
+                    style={{
+                      maxHeight: fullyRevealed || !isTypewriting ? '200px' : '0px',
+                      opacity: fullyRevealed || !isTypewriting ? 1 : 0,
+                    }}
+                  >
+                    <textarea
+                      value={answers[i] || ''}
+                      onChange={(e) => {
+                        const newAnswers = [...answers];
+                        newAnswers[i] = e.target.value;
+                        setAnswers(newAnswers);
+                      }}
+                      rows={3}
+                      className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 resize-none text-gray-900"
+                      placeholder="Your answer..."
+                    />
+                  </div>
+                </div>
+              );
+            })}
+
+            <div
+              className="flex items-center gap-3 pt-2 transition-opacity duration-500"
+              style={{ opacity: typingDone || !shouldTypewrite.current ? 1 : 0 }}
+            >
               <button
                 onClick={() => setStep('round1')}
                 className="px-6 py-3 text-gray-600 font-medium hover:text-gray-800"
@@ -300,7 +419,7 @@ export default function ProfilePage() {
                 disabled={saving || answers.every(a => !a.trim())}
                 className="flex-1 px-6 py-3 bg-indigo-600 text-white rounded-xl font-semibold hover:bg-indigo-700 transition-colors disabled:opacity-50"
               >
-                {saving ? 'Saving...' : 'Complete Profile →'}
+                {saving ? 'Saving...' : 'Complete Profile \u2192'}
               </button>
             </div>
           </div>
@@ -381,17 +500,31 @@ export default function ProfilePage() {
           />
         </div>
 
-        {/* Unique Angle */}
+        {/* Unique Angle — Textarea for 3 lines */}
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-2">
             What&apos;s your unique angle or background?
           </label>
-          <input
-            type="text"
+          <textarea
             value={uniqueAngle}
             onChange={(e) => setUniqueAngle(e.target.value)}
-            placeholder={'e.g., "I\'m a nurse who teaches wellness"'}
-            className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-gray-900"
+            placeholder={'e.g., "I\'m a nurse who left the hospital to teach wellness online. I bring real medical knowledge but explain it in simple, relatable terms that anyone can follow."'}
+            rows={3}
+            className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 resize-none text-gray-900"
+          />
+        </div>
+
+        {/* Content Topics */}
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-2">
+            What specific topics do you want to make content about?
+          </label>
+          <textarea
+            value={contentTopics}
+            onChange={(e) => setContentTopics(e.target.value)}
+            placeholder={'e.g., "Meal prep for busy professionals, debunking fad diets, simple home workouts, mental health and fitness connection"'}
+            rows={3}
+            className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 resize-none text-gray-900"
           />
         </div>
 
@@ -435,10 +568,10 @@ export default function ProfilePage() {
         {/* Submit */}
         <button
           onClick={handleRound1Submit}
-          disabled={saving || (!niche && !customNiche) || !contentStyle}
+          disabled={saving || generatingQuestions || (!niche && !customNiche) || !contentStyle}
           className="w-full px-6 py-3 bg-indigo-600 text-white rounded-xl font-semibold hover:bg-indigo-700 transition-colors disabled:opacity-50"
         >
-          {saving ? 'Saving...' : 'Continue →'}
+          {saving || generatingQuestions ? 'Saving...' : 'Continue \u2192'}
         </button>
       </div>
     </div>

@@ -28,19 +28,23 @@ IG_APP_ID = "936619743392459"
 
 
 class BrowserSession:
-    """Context manager wrapping Camoufox browser + context with cookie loading."""
+    """Context manager wrapping Playwright Chromium with cookie loading.
+    Falls back from Camoufox to standard Playwright if Camoufox is broken.
+    """
 
     def __init__(self, headless=True):
         self.headless = headless
+        self._pw = None
         self._browser = None
-        self._cm = None
         self.ctx = None
 
     def __enter__(self):
-        from camoufox.sync_api import Camoufox
-        self._browser = Camoufox(headless=self.headless, humanize=True, proxy=PROXY, geoip=True)
-        self._cm = self._browser.__enter__()
-        self.ctx = self._cm.new_context()
+        from playwright.sync_api import sync_playwright
+        self._pw = sync_playwright().start()
+        self._browser = self._pw.chromium.launch(headless=self.headless)
+        self.ctx = self._browser.new_context(
+            user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+        )
         if COOKIE_FILE.exists():
             try:
                 cookies = json.loads(COOKIE_FILE.read_text())
@@ -53,8 +57,10 @@ class BrowserSession:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         try:
-            if self._cm:
-                self._browser.__exit__(exc_type, exc_val, exc_tb)
+            if self._browser:
+                self._browser.close()
+            if self._pw:
+                self._pw.stop()
         except Exception as e:
             log.warning(f"Error closing browser: {e}")
         return False
@@ -119,24 +125,13 @@ def _has_valid_session(ctx) -> bool:
 
 def scrape_profile(username: str, headless: bool = True) -> Optional[Dict]:
     """Scrape an Instagram public profile. Returns dict with profile + posts or None."""
-    from camoufox.sync_api import Camoufox
-
     username = username.lstrip("@")
     log.info(f"Scraping Instagram profile: {username}")
     start = time.time()
 
     try:
-        with Camoufox(headless=headless, humanize=True, proxy=PROXY, geoip=True) as browser:
-            ctx = browser.new_context()
-
-            # Load cookies
-            if COOKIE_FILE.exists():
-                try:
-                    cookies = json.loads(COOKIE_FILE.read_text())
-                    if cookies:
-                        ctx.add_cookies(cookies)
-                except Exception:
-                    pass
+        with BrowserSession(headless=headless) as bs:
+            ctx = bs.ctx
 
             page = ctx.new_page()
 
@@ -184,16 +179,17 @@ def scrape_profile(username: str, headless: bool = True) -> Optional[Dict]:
 
 
 def _fetch_profile_api(ctx, username: str) -> Optional[Dict]:
-    """Fetch profile data via Instagram's internal API."""
+    """Fetch profile data via Instagram's internal API, then posts via feed API."""
     page = ctx.new_page()
     try:
         page.goto("https://www.instagram.com/", wait_until="domcontentloaded", timeout=15000)
         time.sleep(1)
 
+        # Step 1: Get profile info + user ID
         result = page.evaluate("""async (username) => {
             try {
                 const r = await fetch(
-                    `https://i.instagram.com/api/v1/users/web_profile_info/?username=${username}`,
+                    `/api/v1/users/web_profile_info/?username=${username}`,
                     {
                         headers: {
                             'X-IG-App-ID': '936619743392459',
@@ -209,10 +205,9 @@ def _fetch_profile_api(ctx, username: str) -> Optional[Dict]:
             }
         }""", username)
 
-        page.close()
-
         if not result or "error" in result:
             log.warning(f"API returned error: {result}")
+            page.close()
             return None
 
         user = (result.get("data", {}).get("user") or
@@ -221,9 +216,66 @@ def _fetch_profile_api(ctx, username: str) -> Optional[Dict]:
 
         if not user:
             log.warning("No user in API response")
+            page.close()
             return None
 
-        return _parse_user_object(user)
+        parsed = _parse_user_object(user)
+
+        # Step 2: If no posts from profile API, fetch via feed API using user ID
+        if not parsed.get("posts") and user.get("id"):
+            user_id = user["id"]
+            log.info(f"Fetching posts via feed API for user_id={user_id}")
+            feed_items = page.evaluate("""async (userId) => {
+                try {
+                    const r = await fetch(
+                        `/api/v1/feed/user/${userId}/?count=24`,
+                        {
+                            headers: {
+                                'X-IG-App-ID': '936619743392459',
+                                'X-Requested-With': 'XMLHttpRequest',
+                            },
+                            credentials: 'include'
+                        }
+                    );
+                    if (!r.ok) return [];
+                    const data = await r.json();
+                    return data.items || [];
+                } catch(e) { return []; }
+            }""", user_id)
+
+            if feed_items:
+                log.info(f"Feed API returned {len(feed_items)} posts")
+                posts = []
+                for item in feed_items:
+                    code = item.get("code", "")
+                    is_video = item.get("media_type") == 2 or item.get("is_video", False)
+                    views = item.get("play_count", 0) or item.get("video_view_count", 0) if is_video else 0
+                    likes = item.get("like_count", 0)
+                    comments = item.get("comment_count", 0)
+                    caption = item.get("caption") or {}
+                    desc = caption.get("text", "") if isinstance(caption, dict) else ""
+                    thumb = ""
+                    candidates = item.get("image_versions2", {}).get("candidates", [])
+                    if candidates:
+                        thumb = candidates[0].get("url", "")
+
+                    posts.append({
+                        "platform_id": code,
+                        "post_url": f"https://www.instagram.com/reel/{code}/" if is_video else f"https://www.instagram.com/p/{code}/",
+                        "thumbnail_url": thumb,
+                        "description": desc,
+                        "views": views or 0,
+                        "likes": likes or 0,
+                        "comments": comments or 0,
+                        "shares": 0,
+                        "is_video": bool(is_video),
+                        "duration_seconds": item.get("video_duration"),
+                        "posted_at": _ts_to_iso(item.get("taken_at")),
+                    })
+                parsed["posts"] = posts
+
+        page.close()
+        return parsed
 
     except Exception as e:
         log.warning(f"API fetch failed: {e}")
@@ -478,7 +530,7 @@ def _parse_meta_count(text: str, pattern: str):
 def scrape_and_store(username: str, headless: bool = True) -> bool:
     """Scrape a profile and store in the database."""
     sys.path.insert(0, str(Path(__file__).parent))
-    from scraper.db import add_profile, update_profile, add_posts, get_profile, log_scrape
+    from scraper.db import add_profile, update_profile, add_posts, get_profile, log_scrape, recalculate_viral_scores
 
     result = scrape_profile(username, headless=headless)
     if not result:
@@ -501,7 +553,16 @@ def scrape_and_store(username: str, headless: bool = True) -> bool:
         last_scraped_at=datetime.utcnow().isoformat(),
     )
     add_posts(pid, result["posts"])
+    recalculate_viral_scores(pid)
     log_scrape(pid, "success", posts_found=len(result["posts"]), duration_ms=result["elapsed_ms"])
+
+    # Upload thumbnails to S3 (non-blocking — failure won't break scraping)
+    try:
+        from scraper.s3 import upload_thumbnails_for_posts
+        upload_thumbnails_for_posts(pid, username, "instagram", result["posts"])
+    except Exception as e:
+        log.warning(f"S3 thumbnail upload failed for @{username}: {e}")
+
     return True
 
 
@@ -589,7 +650,7 @@ if __name__ == "__main__":
             print(f"   {vid} {post['platform_id'][:12]}  {vs:.1f}x viral  ❤️ {likes:,}  💬 {comments:,}")
 
         # Store in DB
-        from scraper.db import add_profile, update_profile, add_posts, log_scrape
+        from scraper.db import add_profile, update_profile, add_posts, log_scrape, recalculate_viral_scores
         p = result["profile"]
         pid = add_profile(target, "instagram")
         update_profile(pid,
@@ -604,7 +665,13 @@ if __name__ == "__main__":
             last_scraped_at=datetime.utcnow().isoformat(),
         )
         add_posts(pid, result["posts"])
+        recalculate_viral_scores(pid)
         log_scrape(pid, "success", posts_found=len(result["posts"]), duration_ms=result["elapsed_ms"])
+        try:
+            from scraper.s3 import upload_thumbnails_for_posts
+            upload_thumbnails_for_posts(pid, target, "instagram", result["posts"])
+        except Exception as e:
+            log.warning(f"S3 thumbnail upload failed: {e}")
         print(f"\n   💾 Stored in database (profile_id={pid})")
     else:
         print(f"\n❌ Failed to scrape {target}")

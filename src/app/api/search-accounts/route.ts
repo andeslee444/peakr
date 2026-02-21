@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { auth } from '@/lib/auth';
 import { getPool } from '@/lib/db';
 
 interface SearchResult {
@@ -111,6 +112,10 @@ export async function GET(req: NextRequest) {
   }
 
   try {
+    // Optional auth — don't fail if no session
+    const session = await auth().catch(() => null);
+    const userId = session?.user?.id ? Number(session.user.id) : null;
+
     // Run external lookup and local DB query in parallel
     const [externalResults, localResults] = await Promise.all([
       platform === 'tiktok' ? lookupTikTokUser(q) : lookupInstagramUser(q),
@@ -126,12 +131,21 @@ export async function GET(req: NextRequest) {
         .then((r) => r.rows),
     ]);
 
-    // Build tracked username set from local DB
-    const trackedSet = new Set(
-      localResults.map((r: Record<string, string>) => r.username.toLowerCase())
-    );
+    // Build tracked username set from junction table (per-user) if logged in
+    let trackedSet: Set<string>;
+    if (userId) {
+      const { rows: trackedRows } = await getPool().query(
+        `SELECT pr.username FROM user_tracked_profiles utp
+         JOIN profiles pr ON utp.profile_id = pr.id
+         WHERE utp.user_id = $1 AND pr.platform = $2`,
+        [userId, platform]
+      );
+      trackedSet = new Set(trackedRows.map((r: { username: string }) => r.username.toLowerCase()));
+    } else {
+      trackedSet = new Set();
+    }
 
-    // Start with local results (flagged as tracked)
+    // Start with local results (flag as tracked based on junction table)
     const merged: SearchResult[] = localResults.map(
       (r: Record<string, unknown>) => ({
         username: r.username as string,
@@ -140,23 +154,21 @@ export async function GET(req: NextRequest) {
         followers: (r.followers as number) || 0,
         post_count: (r.post_count as number) || 0,
         verified: false,
-        is_tracked: true,
+        is_tracked: trackedSet.has((r.username as string).toLowerCase()),
       })
     );
 
     // Append external results that aren't already in local
     for (const ext of externalResults) {
-      if (!trackedSet.has(ext.username.toLowerCase())) {
+      const lowerUsername = ext.username.toLowerCase();
+      const existing = merged.find(m => m.username.toLowerCase() === lowerUsername);
+      if (!existing) {
+        ext.is_tracked = trackedSet.has(lowerUsername);
         merged.push(ext);
       } else {
-        const existing = merged.find(
-          (m) => m.username.toLowerCase() === ext.username.toLowerCase()
-        );
-        if (existing) {
-          if (!existing.avatar_url && ext.avatar_url) existing.avatar_url = ext.avatar_url;
-          if (ext.followers > existing.followers) existing.followers = ext.followers;
-          if (ext.post_count > existing.post_count) existing.post_count = ext.post_count;
-        }
+        if (!existing.avatar_url && ext.avatar_url) existing.avatar_url = ext.avatar_url;
+        if (ext.followers > existing.followers) existing.followers = ext.followers;
+        if (ext.post_count > existing.post_count) existing.post_count = ext.post_count;
       }
     }
 

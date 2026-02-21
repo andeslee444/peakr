@@ -1,30 +1,29 @@
-"""Claude API hook analysis with vision (keyframes + transcript)."""
+"""Hook analysis via OpenClaw (routes through Claude Max subscription)."""
 
 import os
 import json
-import base64
 import logging
 from typing import Optional
 import httpx
 
 log = logging.getLogger("peakr-hooks")
 
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-MODEL = "claude-sonnet-4-6"
+OPENCLAW_URL = os.environ.get("OPENCLAW_URL", "http://127.0.0.1:18789/v1/chat/completions")
+OPENCLAW_TOKEN = os.environ.get("OPENCLAW_TOKEN", "openclaw")
+MODEL = "openclaw:main"
 
 HOOK_PROMPT = """You are analyzing a viral short-form video (TikTok or Instagram Reel) to understand what makes its "hook" work — the first 3-5 seconds that grab attention.
 
 You are given:
-- The full transcript of the video
-- 4 keyframe images from the first 5 seconds
+- The full transcript of the video (if available)
 - Video metadata (description, views, likes, viral score, duration)
 
-Analyze the hook and return a JSON object with these fields:
+Based on the description and transcript, analyze the hook and return a JSON object with these fields:
 
 {
   "hook_type": one of: "question", "shock/surprise", "curiosity gap", "story opener", "bold claim", "visual spectacle", "direct address", "trend/sound", "before/after", "social proof", "POV", "tutorial/value",
-  "hook_text": "the exact opening words from the first 3-5 seconds of the transcript",
-  "hook_visual": "description of what's visually shown in the hook frames",
+  "hook_text": "the exact opening words from the first 3-5 seconds of the transcript (or infer from description if no transcript)",
+  "hook_visual": "best guess of what's visually shown based on the description and context",
   "hook_explanation": "2-3 sentences explaining why this hook works and what psychological trigger it uses",
   "hook_score": integer 1-10 rating of hook effectiveness,
   "niche": one of: "fitness", "finance", "business", "beauty", "food", "comedy", "lifestyle", "health", "fashion", "tech", "real-estate", "education", "motivation", "travel", "parenting",
@@ -47,28 +46,7 @@ def analyze_hook(
     viral_score: float = 0,
     duration: int = 0,
 ) -> Optional[dict]:
-    """Analyze a video's hook using Claude API with vision."""
-    if not ANTHROPIC_API_KEY:
-        log.error("ANTHROPIC_API_KEY not set")
-        return None
-
-    # Build content blocks: keyframe images + text context
-    content = []
-
-    for path in keyframe_paths:
-        try:
-            with open(path, "rb") as f:
-                img_data = base64.standard_b64encode(f.read()).decode("utf-8")
-            content.append({
-                "type": "image",
-                "source": {
-                    "type": "base64",
-                    "media_type": "image/jpeg",
-                    "data": img_data,
-                },
-            })
-        except Exception as e:
-            log.warning(f"Could not read keyframe {path}: {e}")
+    """Analyze a video's hook via OpenClaw (Claude Max)."""
 
     context_text = f"""Video metadata:
 - Description: {description or 'N/A'}
@@ -80,31 +58,33 @@ def analyze_hook(
 Full transcript:
 {transcript or '(no speech detected)'}"""
 
-    content.append({"type": "text", "text": context_text})
+    content = context_text
 
     try:
         resp = httpx.post(
-            "https://api.anthropic.com/v1/messages",
+            OPENCLAW_URL,
             headers={
-                "x-api-key": ANTHROPIC_API_KEY,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
+                "Authorization": f"Bearer {OPENCLAW_TOKEN}",
+                "Content-Type": "application/json",
             },
             json={
                 "model": MODEL,
                 "max_tokens": 1024,
-                "system": HOOK_PROMPT,
-                "messages": [{"role": "user", "content": content}],
+                "messages": [
+                    {"role": "system", "content": HOOK_PROMPT},
+                    {"role": "user", "content": content},
+                ],
             },
-            timeout=60.0,
+            timeout=120.0,
         )
 
         if resp.status_code != 200:
-            log.error(f"Claude API error {resp.status_code}: {resp.text[:300]}")
+            log.error(f"OpenClaw API error {resp.status_code}: {resp.text[:300]}")
             return None
 
         data = resp.json()
-        text = data["content"][0]["text"]
+        text = data["choices"][0]["message"]["content"]
+        log.info(f"OpenClaw response preview: {text[:200]}")
 
         # Parse JSON from response (handle markdown code blocks)
         text = text.strip()
@@ -126,8 +106,8 @@ Full transcript:
         return result
 
     except json.JSONDecodeError as e:
-        log.error(f"Failed to parse Claude response as JSON: {e}")
+        log.error(f"Failed to parse response as JSON: {e}")
         return None
     except Exception as e:
-        log.error(f"Claude API request failed: {e}")
+        log.error(f"OpenClaw API request failed: {e}")
         return None

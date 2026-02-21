@@ -8,64 +8,59 @@ export async function POST(request: NextRequest) {
   }
 
   const body = await request.json();
-  const { niche, content_style, target_audience, unique_angle } = body;
+  const { niche, content_style, target_audience, unique_angle, content_topics } = body;
 
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  const apiKey = process.env.DEEPSEEK_API_KEY;
   if (!apiKey) {
+    console.error('DEEPSEEK_API_KEY not set — cannot generate questions');
     return NextResponse.json({ error: 'API key not configured' }, { status: 500 });
   }
 
-  const prompt = `You are helping a content creator build their profile for a hook intelligence platform. Based on their answers below, generate 4-5 tailored follow-up questions to understand their unique background, expertise, and story. These answers will be used to personalize hook templates for their content.
+  const prompt = `Generate exactly 3 personalized follow-up questions for a content creator. These help personalize viral hook templates for their short-form videos.
 
-Creator info:
-- Niche: ${niche || 'not specified'}
-- Content style: ${content_style || 'not specified'}
-- Target audience: ${target_audience || 'not specified'}
-- Unique angle/background: ${unique_angle || 'not specified'}
+Creator: ${niche || '?'} niche, ${content_style || '?'} style, audience: ${target_audience || '?'}, angle: ${unique_angle || '?'}, topics: ${content_topics || '?'}
 
-Generate questions that dig into:
-1. Their specific expertise or credentials within the niche
-2. A personal transformation or journey they've been through
-3. A common myth or misconception in their field that frustrates them
-4. A surprising or memorable story from their experience
-5. What their audience values most from their content
+Questions should cover: 1) what makes them the right person to talk about this (keep it casual, not "credentials") 2) a story or experience from their journey that their audience would relate to 3) what they wish more people understood about their topic.
 
-Return a JSON array of question strings, like:
-["Question 1?", "Question 2?", "Question 3?", "Question 4?"]
-
-Return ONLY the JSON array, no other text.`;
+Keep questions conversational and easy to answer — like a friend asking, not a job interview. Reference their niche/topics so it feels personal. Return ONLY a JSON array of 3 strings.`;
 
   try {
-    const resp = await fetch('https://api.anthropic.com/v1/messages', {
+    const resp = await fetch('https://api.deepseek.com/chat/completions', {
       method: 'POST',
       headers: {
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
-        'content-type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-6',
-        max_tokens: 512,
+        model: 'deepseek-chat',
         messages: [{ role: 'user', content: prompt }],
+        max_tokens: 512,
+        temperature: 0.7,
       }),
     });
 
     if (!resp.ok) {
       const errText = await resp.text();
-      console.error('Claude API error:', errText.slice(0, 300));
-      return NextResponse.json({ error: 'AI generation failed' }, { status: 500 });
+      console.error('DeepSeek API error:', resp.status, errText.slice(0, 500));
+      return NextResponse.json({ error: 'AI generation failed', status: resp.status }, { status: 500 });
     }
 
     const data = await resp.json();
-    let text = data.content[0].text.trim();
+    let text = data.choices[0].message.content.trim();
 
     // Parse JSON from response (handle markdown code blocks)
     if (text.startsWith('```')) {
       text = text.split('\n').slice(1).join('\n');
-      text = text.replace(/```$/, '').trim();
+      text = text.replace(/```\s*$/, '').trim();
     }
 
     const questions = JSON.parse(text);
+
+    if (!Array.isArray(questions) || questions.length === 0) {
+      console.error('DeepSeek returned non-array or empty:', text.slice(0, 200));
+      return NextResponse.json({ error: 'Invalid response format' }, { status: 500 });
+    }
+
     return NextResponse.json({ questions });
   } catch (e) {
     console.error('Question generation error:', e);
