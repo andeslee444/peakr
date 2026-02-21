@@ -41,14 +41,6 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
     signIn: '/login',
   },
   callbacks: {
-    authorized({ auth: session, request }) {
-      const isLoggedIn = !!session?.user;
-      const isOnDashboard = request.nextUrl.pathname.startsWith('/dashboard');
-      if (isOnDashboard && !isLoggedIn) {
-        return Response.redirect(new URL('/login', request.nextUrl));
-      }
-      return true;
-    },
     async signIn({ profile, account }) {
       // Only run TikTok upsert for TikTok OAuth
       if (account?.provider !== 'tiktok' || !profile) return true;
