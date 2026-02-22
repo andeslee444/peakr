@@ -31,8 +31,18 @@ Based on the description and transcript, analyze the hook and return a JSON obje
   "target_audience": "1-2 word description of who this content targets (e.g. 'gym beginners', 'young moms', 'tech workers')",
   "emotional_trigger": one of: "fear of missing out", "curiosity", "aspiration", "shock/awe", "humor", "empathy", "urgency", "controversy", "nostalgia",
   "cta_type": one of: "follow", "like/save", "comment", "share", "link/bio", "none" (or null if no CTA),
-  "hook_template": "a reusable template version of the hook with [BRACKETS] for swappable parts, e.g. 'I tried [THING] for [TIME PERIOD] and here's what happened'"
+  "hook_template": "a reusable template version of the hook with [BRACKETS] for swappable parts, e.g. 'I tried [THING] for [TIME] and here's what happened'"
 }
+
+For hook_template: Use standardized placeholder names:
+- [THING] for objects, products, activities
+- [TIME] for durations
+- [NUMBER] for quantities
+- [PERSON] for people
+- [PLACE] for locations
+- [RESULT] for outcomes
+Keep templates in sentence case. Remove trailing ellipsis/punctuation.
+If this hook follows a common viral pattern, use the most generic form.
 
 Return ONLY the JSON object, no other text."""
 

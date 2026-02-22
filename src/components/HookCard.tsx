@@ -11,15 +11,13 @@ interface HookCardProps {
   post: Post;
   flipped?: boolean;
   isSaved?: boolean;
-  isHookSaved?: boolean;
   onSave: (postId: number) => void;
-  onSaveHook?: (postId: number) => void;
   onTrack: (username: string, platform: string) => void;
   onInfoClick: (post: Post) => void;
   savingId?: number | null;
 }
 
-export default function HookCard({ post, flipped: controlledFlip, isSaved, isHookSaved, onSave, onSaveHook, onTrack, onInfoClick, savingId }: HookCardProps) {
+export default function HookCard({ post, flipped: controlledFlip, isSaved, onSave, onTrack, onInfoClick, savingId }: HookCardProps) {
   const [localFlip, setLocalFlip] = useState(false);
   const isFlipped = controlledFlip !== undefined ? controlledFlip : localFlip;
   const [copied, setCopied] = useState(false);
@@ -85,16 +83,16 @@ export default function HookCard({ post, flipped: controlledFlip, isSaved, isHoo
               </div>
             )}
 
-            {/* Save + Track buttons */}
+            {/* Save button (single heart) */}
             <div className="absolute bottom-3 right-3 flex items-center gap-1.5 z-20">
               <button
                 onClick={(e) => { e.stopPropagation(); onSave(post.id); }}
                 disabled={savingId === post.id}
-                className={`p-2 rounded-full transition-colors ${isSaved ? 'bg-indigo-500 text-white' : 'bg-white/90 hover:bg-white text-gray-700'}`}
-                title={isSaved ? 'Saved' : 'Save post'}
+                className={`p-2 rounded-full transition-colors ${isSaved ? 'bg-red-500 text-white' : 'bg-white/90 hover:bg-white text-gray-500 hover:text-red-500'}`}
+                title={isSaved ? 'Saved' : 'Save hook'}
               >
                 <svg className="w-4 h-4" fill={isSaved ? 'currentColor' : 'none'} stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
                 </svg>
               </button>
             </div>
@@ -147,25 +145,6 @@ export default function HookCard({ post, flipped: controlledFlip, isSaved, isHoo
           style={{ backfaceVisibility: 'hidden', transform: 'rotateY(180deg)' }}
         >
           <div className="h-full flex flex-col">
-            {/* Save Hook button — top right of back */}
-            {onSaveHook && (
-              <div className="absolute top-3 right-3 z-10">
-                <button
-                  onClick={(e) => { e.stopPropagation(); onSaveHook(post.id); }}
-                  className={`p-2 rounded-full transition-colors shadow-sm ${
-                    isHookSaved
-                      ? 'bg-red-500 text-white'
-                      : 'bg-white/90 hover:bg-white text-gray-500 hover:text-red-500'
-                  }`}
-                  title={isHookSaved ? 'Hook saved' : 'Save hook for playbook'}
-                >
-                  <svg className="w-4 h-4" fill={isHookSaved ? 'currentColor' : 'none'} stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
-                  </svg>
-                </button>
-              </div>
-            )}
-
             {/* Back content — scrollable */}
             <div
               className="flex-1 overflow-y-auto p-4 space-y-3 cursor-pointer"

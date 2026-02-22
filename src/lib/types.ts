@@ -56,6 +56,64 @@ export interface Post {
   analyzed_at: string | null;
 }
 
+export interface SuggestionHook {
+  post_id: number;
+  hook_template: string;
+  hook_type: string;
+  hook_score: number;
+  viral_score: number;
+  views: number;
+}
+
+export interface CreatorSuggestion {
+  username: string;
+  platform: string;
+  display_name: string | null;
+  avatar_url: string | null;
+  followers: number;
+  niche: string;
+  why_text: string;
+  top_hooks: SuggestionHook[];
+}
+
+export interface UserHook {
+  id: number;
+  canonical_template: string | null;
+  display_name: string | null;
+  hook_type: string | null;
+  niche: string | null;
+  notes: string | null;
+  example_count: number;
+  top_example: {
+    post_id: number;
+    thumbnail_url: string | null;
+    s3_thumbnail_url: string | null;
+    viral_score: number;
+    views: number;
+    username: string;
+    platform: string;
+  } | null;
+  created_at: string;
+}
+
+export interface UserHookDetail extends UserHook {
+  examples: Array<{
+    post_id: number;
+    post_url: string | null;
+    thumbnail_url: string | null;
+    s3_thumbnail_url: string | null;
+    description: string | null;
+    views: number;
+    likes: number;
+    viral_score: number;
+    username: string;
+    platform: string;
+    avatar_url: string | null;
+    hook_analysis: HookAnalysis | null;
+    added_at: string;
+  }>;
+}
+
 export interface SavedPost {
   id: number;
   post_id: number;

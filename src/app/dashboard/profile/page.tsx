@@ -1,6 +1,9 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
+import type { CreatorSuggestion } from '@/lib/types';
+import { HookTypeBadge, HookScoreBadge } from '@/components/HookBadge';
+import { formatNumber, proxyImg } from '@/lib/format';
 
 const NICHES = [
   'fitness', 'finance', 'business', 'beauty', 'food', 'comedy',
@@ -12,15 +15,6 @@ const CONTENT_STYLES = [
   'educational', 'entertaining', 'storytelling', 'motivational', 'mixed',
 ];
 
-function getFallbackQuestions(niche: string, contentStyle: string): string[] {
-  const nicheLabel = niche || 'your field';
-  return [
-    `What makes you the right person to talk about ${nicheLabel}? (doesn't have to be formal — life experience counts!)`,
-    `What's a story or moment from your ${contentStyle || ''} journey that your audience would relate to?`,
-    `What do you wish more people understood about ${nicheLabel}?`,
-  ];
-}
-
 interface CreatorProfile {
   niche: string | null;
   content_style: string | null;
@@ -29,7 +23,6 @@ interface CreatorProfile {
   content_topics: string | null;
   platforms: string[] | string | null;
   inspiration_creators: string[] | string | null;
-  background_qa: { q: string; a: string }[] | string | null;
   onboarding_step: string;
   completed_at: string | null;
 }
@@ -38,7 +31,12 @@ export default function ProfilePage() {
   const [profile, setProfile] = useState<CreatorProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [step, setStep] = useState<'round1' | 'round2' | 'complete'>('round1');
+  const [step, setStep] = useState<'round1' | 'suggestions' | 'complete'>('round1');
+
+  // Suggestions state
+  const [suggestions, setSuggestions] = useState<CreatorSuggestion[]>([]);
+  const [loadingSuggestions, setLoadingSuggestions] = useState(false);
+  const [suggestionActions, setSuggestionActions] = useState<Record<string, { tracked: boolean; hooksSaved: boolean }>>({});
 
   // Round 1 fields
   const [niche, setNiche] = useState('');
@@ -50,47 +48,6 @@ export default function ProfilePage() {
   const [platforms, setPlatforms] = useState<string[]>([]);
   const [inspirationCreators, setInspirationCreators] = useState('');
 
-  // Round 2 fields
-  const [questions, setQuestions] = useState<string[]>([]);
-  const [answers, setAnswers] = useState<string[]>([]);
-  const [generatingQuestions, setGeneratingQuestions] = useState(false);
-  const [questionError, setQuestionError] = useState(false);
-
-  // Typewriter effect state
-  const [revealedChars, setRevealedChars] = useState<number[]>([]);
-  const [typingDone, setTypingDone] = useState(false);
-  const shouldTypewrite = useRef(false);
-
-  // Drive typewriter animation
-  useEffect(() => {
-    if (!shouldTypewrite.current || questions.length === 0 || typingDone) return;
-
-    // Initialize revealed chars to 0 for each question
-    if (revealedChars.length !== questions.length) {
-      setRevealedChars(new Array(questions.length).fill(0));
-      return;
-    }
-
-    // Find the current question being typed
-    const currentQ = revealedChars.findIndex((chars, i) => chars < questions[i].length);
-    if (currentQ === -1) {
-      // All questions fully revealed
-      setTypingDone(true);
-      shouldTypewrite.current = false;
-      return;
-    }
-
-    const timer = setTimeout(() => {
-      setRevealedChars(prev => {
-        const next = [...prev];
-        // Type 2-3 chars at a time for faster speed
-        next[currentQ] = Math.min(prev[currentQ] + 2 + Math.floor(Math.random() * 2), questions[currentQ].length);
-        return next;
-      });
-    }, 12 + Math.random() * 8); // 12-20ms per tick, typing 2-3 chars each
-
-    return () => clearTimeout(timer);
-  }, [questions, revealedChars, typingDone]);
 
   const fetchProfile = useCallback(async () => {
     try {
@@ -111,16 +68,11 @@ export default function ProfilePage() {
         const parsedInspo = typeof p.inspiration_creators === 'string' ? JSON.parse(p.inspiration_creators) : p.inspiration_creators;
         setInspirationCreators(parsedInspo?.join(', ') || '');
 
-        const parsedQA = typeof p.background_qa === 'string' ? JSON.parse(p.background_qa) : p.background_qa;
-        if (parsedQA && parsedQA.length > 0) {
-          setQuestions(parsedQA.map((qa: { q: string }) => qa.q));
-          setAnswers(parsedQA.map((qa: { a: string }) => qa.a));
-        }
-
         if (p.onboarding_step === 'complete') {
           setStep('complete');
-        } else if (p.onboarding_step === 'round2') {
-          setStep('round2');
+        } else if (p.onboarding_step === 'suggestions') {
+          setStep('suggestions');
+          fetchSuggestions(p);
         } else {
           setStep('round1');
         }
@@ -152,10 +104,82 @@ export default function ProfilePage() {
     }
   };
 
+  const fetchSuggestions = async (p?: CreatorProfile | null) => {
+    const prof = p || profile;
+    if (!prof) return;
+    setLoadingSuggestions(true);
+    try {
+      const res = await fetch('/api/creator-profile/suggestions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          niche: prof.niche,
+          content_style: prof.content_style,
+          target_audience: prof.target_audience,
+          unique_angle: prof.unique_angle,
+          content_topics: prof.content_topics,
+        }),
+      });
+      const data = await res.json();
+      if (data.suggestions) setSuggestions(data.suggestions);
+    } catch (e) {
+      console.error('Failed to fetch suggestions:', e);
+    } finally {
+      setLoadingSuggestions(false);
+    }
+  };
+
+  const handleTrackCreator = async (username: string, platform: string, displayName: string | null, avatarUrl: string | null, followers: number) => {
+    const key = `${username}:${platform}`;
+    try {
+      await fetch('/api/track', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username,
+          platform,
+          display_name: displayName,
+          avatar_url: avatarUrl,
+          followers,
+        }),
+      });
+      setSuggestionActions(prev => ({
+        ...prev,
+        [key]: { ...prev[key], tracked: true },
+      }));
+    } catch (e) {
+      console.error('Failed to track creator:', e);
+    }
+  };
+
+  const handleSaveHooks = async (username: string, platform: string, postIds: number[]) => {
+    const key = `${username}:${platform}`;
+    try {
+      await Promise.all(postIds.map(post_id =>
+        fetch('/api/user-hooks', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ post_id }),
+        })
+      ));
+      setSuggestionActions(prev => ({
+        ...prev,
+        [key]: { ...prev[key], hooksSaved: true },
+      }));
+    } catch (e) {
+      console.error('Failed to save hooks:', e);
+    }
+  };
+
+  const handleCompleteSuggestions = async () => {
+    await saveProfile({ onboarding_step: 'complete' });
+    setStep('complete');
+  };
+
   const submittingRound1 = useRef(false);
 
   const handleRound1Submit = async () => {
-    if (submittingRound1.current) return; // prevent double-click
+    if (submittingRound1.current) return;
     submittingRound1.current = true;
 
     const effectiveNiche = niche === 'other' ? customNiche : niche;
@@ -164,68 +188,21 @@ export default function ProfilePage() {
       .map(s => s.trim())
       .filter(Boolean);
 
-    // Immediately go to Round 2 with loading spinner
-    setGeneratingQuestions(true);
-    setQuestionError(false);
-    setStep('round2');
-
-    // Save profile and generate questions in parallel
-    const [, questionsResult] = await Promise.all([
-      saveProfile({
-        niche: effectiveNiche,
-        content_style: contentStyle,
-        target_audience: targetAudience,
-        unique_angle: uniqueAngle,
-        content_topics: contentTopics,
-        platforms,
-        inspiration_creators: inspoArray,
-        onboarding_step: 'round2',
-      }),
-      fetch('/api/creator-profile/questions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          niche: effectiveNiche,
-          content_style: contentStyle,
-          target_audience: targetAudience,
-          unique_angle: uniqueAngle,
-          content_topics: contentTopics,
-        }),
-      }).then(r => r.json()).catch(() => null),
-    ]);
-
-    let gotQuestions = false;
-    if (questionsResult?.questions?.length > 0) {
-      setQuestions(questionsResult.questions);
-      setAnswers(new Array(questionsResult.questions.length).fill(''));
-      gotQuestions = true;
-    }
-
-    // Fallback: if AI didn't return questions, use smart defaults
-    if (!gotQuestions) {
-      const fallback = getFallbackQuestions(effectiveNiche, contentStyle);
-      setQuestions(fallback);
-      setAnswers(new Array(fallback.length).fill(''));
-      setQuestionError(true);
-    }
-
-    setGeneratingQuestions(false);
-    // Trigger typewriter effect for fresh questions
-    shouldTypewrite.current = true;
-    setTypingDone(false);
-    setRevealedChars([]);
-    submittingRound1.current = false;
-  };
-
-  const handleRound2Submit = async () => {
-    const backgroundQA = questions.map((q, i) => ({ q, a: answers[i] || '' }));
+    setStep('suggestions');
 
     await saveProfile({
-      background_qa: backgroundQA,
-      onboarding_step: 'complete',
+      niche: effectiveNiche,
+      content_style: contentStyle,
+      target_audience: targetAudience,
+      unique_angle: uniqueAngle,
+      content_topics: contentTopics,
+      platforms,
+      inspiration_creators: inspoArray,
+      onboarding_step: 'suggestions',
     });
 
-    setStep('complete');
+    fetchSuggestions();
+    submittingRound1.current = false;
   };
 
   const handleEditProfile = () => {
@@ -252,9 +229,6 @@ export default function ProfilePage() {
     const parsedPlatforms = typeof profile?.platforms === 'string'
       ? JSON.parse(profile.platforms)
       : profile?.platforms;
-    const parsedQA = typeof profile?.background_qa === 'string'
-      ? JSON.parse(profile.background_qa)
-      : profile?.background_qa;
 
     return (
       <div className="max-w-2xl mx-auto">
@@ -304,20 +278,6 @@ export default function ProfilePage() {
             </div>
           )}
 
-          {parsedQA && parsedQA.length > 0 && (
-            <div className="border-t pt-6">
-              <h3 className="font-semibold text-gray-900 mb-4">Background Details</h3>
-              <div className="space-y-4">
-                {parsedQA.map((qa: { q: string; a: string }, i: number) => (
-                  <div key={i}>
-                    <p className="text-sm text-gray-500">{qa.q}</p>
-                    <p className="font-medium text-gray-900">{qa.a}</p>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
           <div className="border-t pt-6">
             <a
               href="/dashboard/playbook"
@@ -332,96 +292,137 @@ export default function ProfilePage() {
     );
   }
 
-  // Round 2 — AI-generated questions
-  if (step === 'round2') {
+  // Creator suggestions
+  if (step === 'suggestions') {
     return (
       <div className="max-w-2xl mx-auto">
-        <h1 className="text-2xl font-bold text-gray-900 mb-2">Let&apos;s personalize your playbook</h1>
+        <div className="flex items-center justify-between mb-2">
+          <h1 className="text-2xl font-bold text-gray-900">Creators to study</h1>
+          <button
+            onClick={handleCompleteSuggestions}
+            className="text-sm text-gray-500 hover:text-gray-700"
+          >
+            Skip this step &rarr;
+          </button>
+        </div>
         <p className="text-gray-500 mb-8">
-          Based on what you told us, we have a few more questions to help generate better hook templates.
+          Based on your profile, these creators use hook patterns you can learn from.
         </p>
 
-        {generatingQuestions ? (
+        {loadingSuggestions ? (
           <div className="flex items-center gap-3 py-12 justify-center text-gray-500">
             <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-indigo-600" />
-            Generating personalized questions...
+            Finding creators that match your story...
+          </div>
+        ) : suggestions.length === 0 ? (
+          <div className="bg-white rounded-2xl border border-gray-200 p-8 text-center">
+            <p className="text-gray-500 mb-6">
+              We don&apos;t have enough creator data in your niche yet. You can start tracking creators manually from the dashboard.
+            </p>
+            <button
+              onClick={handleCompleteSuggestions}
+              className="px-6 py-3 bg-indigo-600 text-white rounded-xl font-semibold hover:bg-indigo-700 transition-colors"
+            >
+              Complete Profile
+            </button>
           </div>
         ) : (
-          <div className="bg-white rounded-2xl border border-gray-200 p-6 space-y-6">
-            {questionError && (
-              <div className="text-sm text-amber-600 bg-amber-50 px-4 py-2 rounded-lg">
-                We couldn&apos;t generate AI-tailored questions right now, but these defaults will still help personalize your playbook.
-              </div>
-            )}
-
-            {questions.map((q, i) => {
-              const isTypewriting = shouldTypewrite.current && !typingDone;
-              const chars = revealedChars[i] ?? q.length;
-              const fullyRevealed = chars >= q.length;
-              const isCurrentlyTyping = isTypewriting && !fullyRevealed && (i === 0 || (revealedChars[i - 1] ?? 0) >= questions[i - 1].length);
-              const hasStarted = !isTypewriting || chars > 0 || i === 0 || (revealedChars[i - 1] ?? 0) >= questions[i - 1].length;
-
-              if (!hasStarted && isTypewriting) return null;
+          <div className="space-y-4">
+            {suggestions.map((creator) => {
+              const key = `${creator.username}:${creator.platform}`;
+              const actions = suggestionActions[key] || { tracked: false, hooksSaved: false };
+              const platformIcon = creator.platform === 'tiktok' ? '\uD83C\uDFB5' : '\uD83D\uDCF8';
 
               return (
-                <div
-                  key={i}
-                  className="transition-opacity duration-300"
-                  style={{ opacity: hasStarted ? 1 : 0 }}
-                >
-                  <label className="block text-sm font-medium text-gray-700 mb-2 min-h-[1.25rem]">
-                    {isTypewriting ? (
-                      <>
-                        {q.slice(0, chars)}
-                        {isCurrentlyTyping && (
-                          <span className="inline-block w-0.5 h-4 bg-indigo-500 ml-0.5 animate-pulse align-text-bottom" />
-                        )}
-                      </>
+                <div key={key} className="bg-white rounded-2xl border border-gray-200 p-6">
+                  {/* Header */}
+                  <div className="flex items-center gap-3 mb-3">
+                    {creator.avatar_url ? (
+                      <img
+                        src={proxyImg(creator.avatar_url)}
+                        alt={creator.username}
+                        className="w-10 h-10 rounded-full object-cover"
+                      />
                     ) : (
-                      q
+                      <div className="w-10 h-10 rounded-full bg-gray-200 flex items-center justify-center text-gray-400 text-sm font-bold">
+                        {creator.username[0]?.toUpperCase()}
+                      </div>
                     )}
-                  </label>
-                  <div
-                    className="transition-all duration-500 overflow-hidden"
-                    style={{
-                      maxHeight: fullyRevealed || !isTypewriting ? '200px' : '0px',
-                      opacity: fullyRevealed || !isTypewriting ? 1 : 0,
-                    }}
-                  >
-                    <textarea
-                      value={answers[i] || ''}
-                      onChange={(e) => {
-                        const newAnswers = [...answers];
-                        newAnswers[i] = e.target.value;
-                        setAnswers(newAnswers);
-                      }}
-                      rows={3}
-                      className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 resize-none text-gray-900"
-                      placeholder="Your answer..."
-                    />
+                    <div className="flex-1 min-w-0">
+                      <p className="font-semibold text-gray-900 truncate">
+                        @{creator.username}
+                      </p>
+                      <p className="text-xs text-gray-500">
+                        {platformIcon} {formatNumber(creator.followers)} followers
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Why text */}
+                  {creator.why_text && (
+                    <p className="text-sm text-gray-600 mb-4 italic">
+                      &ldquo;{creator.why_text}&rdquo;
+                    </p>
+                  )}
+
+                  {/* Top hooks */}
+                  {creator.top_hooks.length > 0 && (
+                    <div className="space-y-2 mb-4">
+                      <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Top Hooks</p>
+                      {creator.top_hooks.map((hook, i) => (
+                        <div key={i} className="bg-gray-50 rounded-xl p-3">
+                          <div className="flex items-center gap-2 mb-1">
+                            <HookTypeBadge hookType={hook.hook_type} />
+                            <HookScoreBadge score={hook.hook_score} />
+                            <span className="text-[10px] text-gray-400 ml-auto">
+                              {formatNumber(hook.views)} views
+                            </span>
+                          </div>
+                          {hook.hook_template && (
+                            <p className="text-sm text-gray-700">
+                              &ldquo;{hook.hook_template}&rdquo;
+                            </p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Action buttons */}
+                  <div className="flex items-center gap-3">
+                    <button
+                      onClick={() => handleTrackCreator(creator.username, creator.platform, creator.display_name, creator.avatar_url, creator.followers)}
+                      disabled={actions.tracked}
+                      className={`px-4 py-2 rounded-xl text-sm font-semibold transition-colors ${
+                        actions.tracked
+                          ? 'bg-green-50 text-green-600'
+                          : 'bg-indigo-600 text-white hover:bg-indigo-700'
+                      }`}
+                    >
+                      {actions.tracked ? '\u2713 Tracked' : 'Track Creator'}
+                    </button>
+                    <button
+                      onClick={() => handleSaveHooks(creator.username, creator.platform, creator.top_hooks.map(h => h.post_id))}
+                      disabled={actions.hooksSaved || creator.top_hooks.length === 0}
+                      className={`px-4 py-2 rounded-xl text-sm font-semibold transition-colors ${
+                        actions.hooksSaved
+                          ? 'bg-green-50 text-green-600'
+                          : 'bg-amber-500 text-white hover:bg-amber-600'
+                      }`}
+                    >
+                      {actions.hooksSaved ? '\u2713 Hooks Saved' : 'Save Hooks'}
+                    </button>
                   </div>
                 </div>
               );
             })}
 
-            <div
-              className="flex items-center gap-3 pt-2 transition-opacity duration-500"
-              style={{ opacity: typingDone || !shouldTypewrite.current ? 1 : 0 }}
+            <button
+              onClick={handleCompleteSuggestions}
+              className="w-full px-6 py-3 bg-indigo-600 text-white rounded-xl font-semibold hover:bg-indigo-700 transition-colors mt-6"
             >
-              <button
-                onClick={() => setStep('round1')}
-                className="px-6 py-3 text-gray-600 font-medium hover:text-gray-800"
-              >
-                &larr; Back
-              </button>
-              <button
-                onClick={handleRound2Submit}
-                disabled={saving || answers.every(a => !a.trim())}
-                className="flex-1 px-6 py-3 bg-indigo-600 text-white rounded-xl font-semibold hover:bg-indigo-700 transition-colors disabled:opacity-50"
-              >
-                {saving ? 'Saving...' : 'Complete Profile \u2192'}
-              </button>
-            </div>
+              Complete Profile &rarr;
+            </button>
           </div>
         )}
       </div>
@@ -568,10 +569,10 @@ export default function ProfilePage() {
         {/* Submit */}
         <button
           onClick={handleRound1Submit}
-          disabled={saving || generatingQuestions || (!niche && !customNiche) || !contentStyle}
+          disabled={saving || (!niche && !customNiche) || !contentStyle}
           className="w-full px-6 py-3 bg-indigo-600 text-white rounded-xl font-semibold hover:bg-indigo-700 transition-colors disabled:opacity-50"
         >
-          {saving || generatingQuestions ? 'Saving...' : 'Continue \u2192'}
+          {saving ? 'Saving...' : 'Continue \u2192'}
         </button>
       </div>
     </div>

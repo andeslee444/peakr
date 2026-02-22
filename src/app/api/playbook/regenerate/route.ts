@@ -55,31 +55,32 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // Get saved hooks matching the criteria
-  const conditions: string[] = ['sh.user_id = $1'];
+  // Get hooks from user_hooks → user_hook_examples → posts
+  const conditions: string[] = ['uh.user_id = $1'];
   const params: (string | number)[] = [userId];
   let paramIdx = 2;
 
   if (targetType) {
-    conditions.push(`p.hook_analysis->>'hook_type' = $${paramIdx}`);
+    conditions.push(`(uh.hook_type = $${paramIdx} OR p.hook_analysis->>'hook_type' = $${paramIdx})`);
     params.push(targetType);
     paramIdx++;
   }
   if (targetNiche) {
-    conditions.push(`p.hook_analysis->>'niche' = $${paramIdx}`);
+    conditions.push(`(uh.niche = $${paramIdx} OR p.hook_analysis->>'niche' = $${paramIdx})`);
     params.push(targetNiche);
     paramIdx++;
   }
 
   const hooksRes = await pool.query(`
-    SELECT p.id, p.description, p.hook_analysis, p.views, p.likes, p.viral_score,
+    SELECT DISTINCT ON (p.id) p.id, p.description, p.hook_analysis, p.views, p.likes, p.viral_score,
            pr.username, pr.platform
-    FROM saved_hooks sh
-    JOIN posts p ON sh.post_id = p.id
+    FROM user_hooks uh
+    JOIN user_hook_examples uhe ON uhe.user_hook_id = uh.id
+    JOIN posts p ON uhe.post_id = p.id
     JOIN profiles pr ON p.profile_id = pr.id
     WHERE ${conditions.join(' AND ')}
       AND p.hook_analysis IS NOT NULL
-    ORDER BY p.viral_score DESC
+    ORDER BY p.id, p.viral_score DESC
     LIMIT 10
   `, params);
 

@@ -155,6 +155,26 @@ CREATE TABLE IF NOT EXISTS user_tracked_profiles (
   tracked_at TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE(user_id, profile_id)
 );
+
+CREATE TABLE IF NOT EXISTS user_hooks (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  canonical_template TEXT,
+  display_name TEXT,
+  hook_type TEXT,
+  niche TEXT,
+  notes TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS user_hook_examples (
+  id SERIAL PRIMARY KEY,
+  user_hook_id INTEGER NOT NULL REFERENCES user_hooks(id) ON DELETE CASCADE,
+  post_id INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+  added_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(user_hook_id, post_id)
+);
 """
 
 
@@ -316,6 +336,11 @@ def migrate_hook_columns():
             created_at TIMESTAMPTZ DEFAULT NOW(),
             expires_at TIMESTAMPTZ NOT NULL
         )
+    """)
+    cur.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS user_hooks_user_template_key
+          ON user_hooks(user_id, canonical_template)
+          WHERE canonical_template IS NOT NULL
     """)
     conn.commit()
     cur.close()

@@ -18,8 +18,7 @@ export default function HookLabPage() {
   const [filters, setFilters] = useState<HookFilterState>(DEFAULT_FILTERS);
   const [allFlipped, setAllFlipped] = useState(false);
   const [selectedPost, setSelectedPost] = useState<Post | null>(null);
-  const [savedIds, setSavedIds] = useState<Set<number>>(new Set());
-  const [savedHookIds, setSavedHookIds] = useState<Set<number>>(new Set());
+  const [savedPostIds, setSavedPostIds] = useState<Set<number>>(new Set());
   const [savingId, setSavingId] = useState<number | null>(null);
 
   const fetchPosts = useCallback(async (currentOffset: number, append: boolean) => {
@@ -47,7 +46,12 @@ export default function HookLabPage() {
         setPosts(prev => [...prev, ...fetchedPosts]);
       } else {
         setPosts(fetchedPosts);
-        setSavedIds(new Set(fetchedPosts.filter((p: Post & { is_saved?: boolean }) => p.is_saved).map((p: Post) => p.id)));
+        // Populate saved state from is_hook_saved flag
+        setSavedPostIds(new Set(
+          fetchedPosts
+            .filter((p: Post & { is_hook_saved?: boolean }) => p.is_hook_saved)
+            .map((p: Post) => p.id)
+        ));
       }
       setTotal(data.total || 0);
     } catch {
@@ -58,27 +62,11 @@ export default function HookLabPage() {
     }
   }, [filters]);
 
-  // Fetch saved hook IDs
-  const fetchSavedHooks = useCallback(async () => {
-    try {
-      const res = await fetch('/api/saved-hooks');
-      const data = await res.json();
-      if (data.hooks) {
-        setSavedHookIds(new Set(data.hooks.map((h: { post_id: number }) => h.post_id)));
-      }
-    } catch { /* ignore */ }
-  }, []);
-
   // Fetch on filter change
   useEffect(() => {
     setOffset(0);
     fetchPosts(0, false);
   }, [fetchPosts]);
-
-  // Fetch saved hooks on mount
-  useEffect(() => {
-    fetchSavedHooks();
-  }, [fetchSavedHooks]);
 
   const loadMore = () => {
     const newOffset = offset + PAGE_SIZE;
@@ -86,26 +74,47 @@ export default function HookLabPage() {
     fetchPosts(newOffset, true);
   };
 
-  const savePost = async (postId: number) => {
+  const saveHook = async (postId: number) => {
     setSavingId(postId);
-    const alreadySaved = savedIds.has(postId);
+    const alreadySaved = savedPostIds.has(postId);
     try {
       if (alreadySaved) {
-        await fetch('/api/saved', {
-          method: 'DELETE',
+        // Find the user_hook that contains this post and unsave
+        // We need to remove via the example endpoint
+        // First get the user_hook_id for this post
+        const hooksRes = await fetch('/api/user-hooks');
+        const hooksData = await hooksRes.json();
+        const hooks = hooksData.hooks || [];
+        // Find which hook has this post as an example
+        let targetHookId: number | null = null;
+        for (const hook of hooks) {
+          if (hook.example_thumbnails?.some((ex: { post_id: number }) => ex.post_id === postId)) {
+            targetHookId = hook.id;
+            break;
+          }
+          if (hook.top_example?.post_id === postId) {
+            targetHookId = hook.id;
+            break;
+          }
+        }
+        if (targetHookId) {
+          await fetch('/api/user-hooks/example', {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ user_hook_id: targetHookId, post_id: postId }),
+          });
+        }
+        setSavedPostIds(prev => { const next = new Set(prev); next.delete(postId); return next; });
+      } else {
+        await fetch('/api/user-hooks', {
+          method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ post_id: postId }),
         });
-        setSavedIds(prev => { const next = new Set(prev); next.delete(postId); return next; });
-      } else {
-        await fetch('/api/saved', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ post_id: postId, folder: 'default' }),
-        });
-        setSavedIds(prev => new Set(prev).add(postId));
+        setSavedPostIds(prev => new Set(prev).add(postId));
       }
-    } finally {
+    } catch { /* ignore */ }
+    finally {
       setSavingId(null);
     }
   };
@@ -116,27 +125,6 @@ export default function HookLabPage() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, platform }),
     });
-  };
-
-  const saveHook = async (postId: number) => {
-    const alreadySaved = savedHookIds.has(postId);
-    try {
-      if (alreadySaved) {
-        await fetch('/api/saved-hooks', {
-          method: 'DELETE',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ post_id: postId }),
-        });
-        setSavedHookIds(prev => { const next = new Set(prev); next.delete(postId); return next; });
-      } else {
-        await fetch('/api/saved-hooks', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ post_id: postId }),
-        });
-        setSavedHookIds(prev => new Set(prev).add(postId));
-      }
-    } catch { /* ignore */ }
   };
 
   const handlePostUpdate = useCallback((postId: number, updates: { hook_analysis: HookAnalysis; analyzed_at: string; transcript: string | null }) => {
@@ -185,10 +173,8 @@ export default function HookLabPage() {
                 key={post.id}
                 post={post}
                 flipped={allFlipped ? true : undefined}
-                isSaved={savedIds.has(post.id)}
-                isHookSaved={savedHookIds.has(post.id)}
-                onSave={savePost}
-                onSaveHook={saveHook}
+                isSaved={savedPostIds.has(post.id)}
+                onSave={saveHook}
                 onTrack={trackUser}
                 onInfoClick={setSelectedPost}
                 savingId={savingId}
@@ -222,6 +208,8 @@ export default function HookLabPage() {
         open={!!selectedPost}
         onClose={() => setSelectedPost(null)}
         onPostUpdate={handlePostUpdate}
+        isSaved={selectedPost ? savedPostIds.has(selectedPost.id) : false}
+        onSave={saveHook}
       />
     </div>
   );

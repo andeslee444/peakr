@@ -13,9 +13,11 @@ interface InsightsPanelProps {
   open: boolean;
   onClose: () => void;
   onPostUpdate?: (postId: number, updates: { hook_analysis: HookAnalysis; analyzed_at: string; transcript: string | null }) => void;
+  isSaved?: boolean;
+  onSave?: (postId: number) => void;
 }
 
-export default function InsightsPanel({ post, open, onClose, onPostUpdate }: InsightsPanelProps) {
+export default function InsightsPanel({ post, open, onClose, onPostUpdate, isSaved, onSave }: InsightsPanelProps) {
   const [analysis, setAnalysis] = useState<HookAnalysis | null>(null);
   const [transcript, setTranscript] = useState<string | null>(null);
   const [status, setStatus] = useState<'idle' | 'analyzing' | 'queued' | 'done' | 'error'>('idle');
@@ -191,6 +193,20 @@ export default function InsightsPanel({ post, open, onClose, onPostUpdate }: Ins
               </div>
             </div>
           </div>
+
+          {/* Save Hook button */}
+          {onSave && postId && (
+            <button
+              onClick={() => onSave(postId)}
+              className={`w-full py-2.5 rounded-xl font-semibold text-sm transition-colors ${
+                isSaved
+                  ? 'bg-red-50 text-red-600 border border-red-200'
+                  : 'bg-indigo-600 text-white hover:bg-indigo-700'
+              }`}
+            >
+              {isSaved ? '♥ Saved to My Hooks' : '♡ Save Hook'}
+            </button>
+          )}
 
           {/* Hook Analysis */}
           <div>

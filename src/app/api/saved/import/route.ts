@@ -1,7 +1,9 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
+import { auth } from '@/lib/auth';
 import { getPool } from '@/lib/db';
 import { isTikTokUrl, parseTikTokUrl, parseFromOEmbed } from '@/lib/tiktok-url';
 import { isInstagramReelUrl, parseInstagramReelUrl } from '@/lib/instagram-url';
+import { normalizeTemplate } from '@/lib/normalize-template';
 
 interface OEmbedResponse {
   title: string;
@@ -13,8 +15,11 @@ interface OEmbedResponse {
   html: string;
 }
 
-export async function POST(request: Request) {
+export async function POST(request: NextRequest) {
   try {
+    const session = await auth();
+    const userId = session?.user?.id ? Number(session.user.id) : null;
+
     const body = await request.json();
     const { url, folder = 'default' } = body;
 
@@ -158,6 +163,52 @@ export async function POST(request: Request) {
         'INSERT INTO saved_posts (post_id, folder) VALUES ($1, $2) RETURNING id',
         [post.id, folder],
       );
+
+      // Also create a user_hook entry if user is logged in
+      if (userId) {
+        // Check if post has hook_analysis with a template
+        const { rows: [postData] } = await client.query(
+          'SELECT hook_analysis FROM posts WHERE id = $1',
+          [post.id]
+        );
+        const analysis = postData?.hook_analysis;
+        const rawTemplate = analysis?.hook_template ? String(analysis.hook_template) : null;
+        const canonical = rawTemplate ? normalizeTemplate(rawTemplate) : null;
+        const hookType = analysis?.hook_type || null;
+        const niche = analysis?.niche || null;
+
+        let userHookId: number;
+
+        if (canonical) {
+          const { rows: existingHook } = await client.query(
+            'SELECT id FROM user_hooks WHERE user_id = $1 AND canonical_template = $2',
+            [userId, canonical]
+          );
+          if (existingHook.length > 0) {
+            userHookId = existingHook[0].id;
+          } else {
+            const { rows: [newHook] } = await client.query(
+              `INSERT INTO user_hooks (user_id, canonical_template, display_name, hook_type, niche)
+               VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+              [userId, canonical, rawTemplate, hookType, niche]
+            );
+            userHookId = newHook.id;
+          }
+        } else {
+          const { rows: [newHook] } = await client.query(
+            `INSERT INTO user_hooks (user_id, canonical_template, display_name, hook_type, niche)
+             VALUES ($1, NULL, NULL, $2, $3) RETURNING id`,
+            [userId, hookType, niche]
+          );
+          userHookId = newHook.id;
+        }
+
+        await client.query(
+          `INSERT INTO user_hook_examples (user_hook_id, post_id)
+           VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+          [userHookId, post.id]
+        );
+      }
 
       await client.query('COMMIT');
 

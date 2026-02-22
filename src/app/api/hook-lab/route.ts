@@ -1,8 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { auth } from '@/lib/auth';
 import { getPool } from '@/lib/db';
 
 export async function GET(request: NextRequest) {
   try {
+    const session = await auth();
+    const userId = session?.user?.id ? Number(session.user.id) : null;
+
     const { searchParams } = new URL(request.url);
     const hookType = searchParams.get('hook_type');
     const niche = searchParams.get('niche');
@@ -82,9 +86,19 @@ export async function GET(request: NextRequest) {
     const total = parseInt(countRows[0].total, 10);
 
     // Fetch posts
+    const isHookSavedSubquery = userId
+      ? `, EXISTS (
+            SELECT 1 FROM user_hook_examples uhe
+            JOIN user_hooks uh ON uhe.user_hook_id = uh.id
+            WHERE uhe.post_id = p.id AND uh.user_id = $${paramIndex++}
+          ) AS is_hook_saved`
+      : ', false AS is_hook_saved';
+    if (userId) params.push(userId);
+
     const query = `
       SELECT p.*, pr.username, pr.platform, pr.avatar_url, pr.display_name,
              (sp.id IS NOT NULL) AS is_saved
+             ${isHookSavedSubquery}
       FROM posts p
       JOIN profiles pr ON p.profile_id = pr.id
       LEFT JOIN saved_posts sp ON sp.post_id = p.id
