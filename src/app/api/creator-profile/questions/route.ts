@@ -16,13 +16,26 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'API key not configured' }, { status: 500 });
   }
 
-  const prompt = `Generate exactly 3 personalized follow-up questions for a content creator. These help personalize viral hook templates for their short-form videos.
+  const prompt = `You are helping someone who wants to start creating short-form content but hasn't started yet (or is very early). They have life experience and stories worth sharing — they just don't know which ones are content-worthy yet. Your job is to uncover their best material.
 
-Creator: ${niche || '?'} niche, ${content_style || '?'} style, audience: ${target_audience || '?'}, angle: ${unique_angle || '?'}, topics: ${content_topics || '?'}
+Here's what they told us:
+- Niche/topic: ${niche || 'not specified'}
+- Content style: ${content_style || 'not specified'}
+- Target audience: ${target_audience || 'not specified'}
+- Unique angle/background: ${unique_angle || 'not specified'}
+- Content topics: ${content_topics || 'not specified'}
 
-Questions should cover: 1) what makes them the right person to talk about this (keep it casual, not "credentials") 2) a story or experience from their journey that their audience would relate to 3) what they wish more people understood about their topic.
+Generate exactly 3 personalized questions covering these dimensions (one each):
 
-Keep questions conversational and easy to answer — like a friend asking, not a job interview. Reference their niche/topics so it feels personal. Return ONLY a JSON array of 3 strings.`;
+1. TURNING POINT — Ask about the specific moment or experience that made them care about ${niche || 'this topic'}. Not "why are you interested" but "what happened to you?" Everyone has a story — give a brief example relevant to their niche to spark their memory.
+
+2. UNPOPULAR TAKE — Ask what opinion they hold about ${content_topics || niche || 'their topic'} that most people would disagree with or be surprised by. Frame it as "what do you know from experience that goes against the common advice?" Contrarian views make the best hooks for ${target_audience || 'their audience'}.
+
+3. MISTAKES & LESSONS — Ask about a mistake they made, money they wasted, or wrong path they took related to ${niche || 'their field'}. "I wish someone told me..." stories are the most relatable content for ${target_audience || 'beginners'}. Give a niche-specific example to help them think of one.
+
+Make each question feel like a friend brainstorming content ideas over coffee. Reference their specific niche, topics, and audience so it feels personal — not generic. Include a brief example with each question to show what kind of answer you're looking for.
+
+Return ONLY a JSON array of 3 strings.`;
 
   try {
     const resp = await fetch('https://api.deepseek.com/chat/completions', {

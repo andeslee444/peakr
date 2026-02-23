@@ -88,9 +88,9 @@ export async function GET(request: NextRequest) {
     // Fetch posts
     const isHookSavedSubquery = userId
       ? `, EXISTS (
-            SELECT 1 FROM user_hook_examples uhe
-            JOIN user_hooks uh ON uhe.user_hook_id = uh.id
-            WHERE uhe.post_id = p.id AND uh.user_id = $${paramIndex++}
+            SELECT 1 FROM hook_pattern_posts hpp
+            JOIN user_saved_patterns usp ON usp.pattern_id = hpp.pattern_id
+            WHERE hpp.post_id = p.id AND usp.user_id = $${paramIndex++}
           ) AS is_hook_saved`
       : ', false AS is_hook_saved';
     if (userId) params.push(userId);

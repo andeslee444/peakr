@@ -57,6 +57,13 @@ interface HookData {
   };
 }
 
+interface ScheduleEntry {
+  day?: number;
+  hour?: number;
+  count: number;
+  avg_viral: number;
+}
+
 interface AnalyticsData {
   overview: {
     totalAccounts: number;
@@ -68,6 +75,10 @@ interface AnalyticsData {
   };
   accountStats: AccountStat[];
   topPosts: TopPost[];
+  schedule?: {
+    byDay: ScheduleEntry[];
+    byHour: ScheduleEntry[];
+  };
 }
 
 export default function AnalyticsPage() {
@@ -102,6 +113,30 @@ export default function AnalyticsPage() {
   }
 
   const o = data?.overview || { totalAccounts: 0, totalPosts: 0, avgViralScore: 0, topViralScore: 0, totalViews: 0, viralPostCount: 0 };
+
+  if (o.totalAccounts === 0) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">Analytics</h1>
+          <p className="text-gray-600 mt-1">Track performance across your accounts</p>
+        </div>
+        <div className="bg-white rounded-2xl p-12 card-shadow text-center">
+          <span className="text-4xl">📊</span>
+          <h2 className="text-lg font-semibold text-gray-900 mt-4">No tracked accounts yet</h2>
+          <p className="text-gray-500 mt-2 max-w-md mx-auto">
+            Start tracking Instagram and TikTok creators to see analytics on their performance, viral scores, and hook patterns.
+          </p>
+          <a
+            href="/dashboard/tracked"
+            className="inline-block mt-6 px-6 py-3 bg-indigo-600 text-white rounded-xl font-semibold hover:bg-indigo-700 transition-colors"
+          >
+            Track Your First Account
+          </a>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -219,6 +254,110 @@ export default function AnalyticsPage() {
           </div>
         )}
       </div>
+
+      {/* Posting Schedule Insights */}
+      {data?.schedule && (data.schedule.byDay.length > 0 || data.schedule.byHour.length > 0) && (() => {
+        const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+        const byDay = data.schedule!.byDay;
+        const byHour = data.schedule!.byHour;
+        const maxDayCount = Math.max(...byDay.map(d => d.count), 1);
+        const maxHourCount = Math.max(...byHour.map(h => h.count), 1);
+
+        // Find best day and best hour
+        const bestDay = byDay.length > 0 ? byDay.reduce((a, b) => (Number(b.avg_viral) > Number(a.avg_viral) ? b : a)) : null;
+        const bestHour = byHour.length > 0 ? byHour.reduce((a, b) => (Number(b.avg_viral) > Number(a.avg_viral) ? b : a)) : null;
+
+        const formatHour = (h: number) => {
+          if (h === 0) return '12am';
+          if (h === 12) return '12pm';
+          return h < 12 ? `${h}am` : `${h - 12}pm`;
+        };
+
+        return (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* By Day of Week */}
+            <div className="bg-white rounded-2xl p-6 card-shadow">
+              <h2 className="text-lg font-semibold text-gray-900 mb-1">Posting by Day</h2>
+              <p className="text-xs text-gray-500 mb-4">When tracked creators post, and which days go viral</p>
+              <div className="space-y-2">
+                {dayNames.map((name, i) => {
+                  const entry = byDay.find(d => d.day === i);
+                  const count = entry?.count || 0;
+                  const avgViral = Number(entry?.avg_viral || 0);
+                  const isBest = bestDay && bestDay.day === i;
+                  return (
+                    <div key={i} className="flex items-center gap-3">
+                      <span className={`text-xs w-8 text-right ${isBest ? 'font-bold text-indigo-600' : 'text-gray-500'}`}>{name}</span>
+                      <div className="flex-1 bg-gray-100 rounded-full h-6 overflow-hidden relative">
+                        <div
+                          className={`h-full rounded-full ${isBest ? 'bg-indigo-500' : 'bg-indigo-300'}`}
+                          style={{ width: `${(count / maxDayCount) * 100}%`, minWidth: count > 0 ? '8px' : '0' }}
+                        />
+                        {count > 0 && (
+                          <span className="absolute inset-0 flex items-center px-2 text-[10px] text-gray-700 font-medium">
+                            {count} posts
+                          </span>
+                        )}
+                      </div>
+                      <span className={`text-xs w-12 text-right ${isBest ? 'font-bold text-indigo-600' : 'text-gray-500'}`}>
+                        {avgViral > 0 ? `${avgViral.toFixed(1)}x` : '-'}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+              {bestDay && (
+                <p className="text-xs text-indigo-600 font-medium mt-3 pt-3 border-t border-gray-100">
+                  Best day: {dayNames[bestDay.day!]} ({Number(bestDay.avg_viral).toFixed(1)}x avg viral)
+                </p>
+              )}
+            </div>
+
+            {/* By Hour of Day */}
+            <div className="bg-white rounded-2xl p-6 card-shadow">
+              <h2 className="text-lg font-semibold text-gray-900 mb-1">Posting by Hour</h2>
+              <p className="text-xs text-gray-500 mb-4">Post times and their viral performance</p>
+              <div className="grid grid-cols-6 gap-1">
+                {Array.from({ length: 24 }, (_, h) => {
+                  const entry = byHour.find(e => e.hour === h);
+                  const count = entry?.count || 0;
+                  const avgViral = Number(entry?.avg_viral || 0);
+                  const intensity = count / maxHourCount;
+                  const isBest = bestHour && bestHour.hour === h;
+                  return (
+                    <div
+                      key={h}
+                      className={`aspect-square rounded-lg flex flex-col items-center justify-center relative group cursor-default ${
+                        isBest ? 'ring-2 ring-indigo-500' : ''
+                      }`}
+                      style={{
+                        backgroundColor: count > 0
+                          ? `rgba(99, 102, 241, ${0.1 + intensity * 0.7})`
+                          : '#f3f4f6',
+                      }}
+                      title={`${formatHour(h)}: ${count} posts, ${avgViral.toFixed(1)}x avg viral`}
+                    >
+                      <span className={`text-[9px] font-medium ${intensity > 0.5 ? 'text-white' : 'text-gray-600'}`}>
+                        {formatHour(h)}
+                      </span>
+                      {count > 0 && (
+                        <span className={`text-[8px] ${intensity > 0.5 ? 'text-indigo-100' : 'text-gray-500'}`}>
+                          {count}
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+              {bestHour && (
+                <p className="text-xs text-indigo-600 font-medium mt-3 pt-3 border-t border-gray-100">
+                  Best hour: {formatHour(bestHour.hour!)} ({Number(bestHour.avg_viral).toFixed(1)}x avg viral)
+                </p>
+              )}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Hook Analysis Section */}
       {hookData && hookData.stats.totalAnalyzed > 0 && (

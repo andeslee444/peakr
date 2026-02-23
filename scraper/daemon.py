@@ -28,7 +28,8 @@ from scraper.db import (
     get_active_profiles, pop_scrape_queue, complete_scrape_queue,
     get_active_seed_creators, get_top_seed_creators, add_profile,
     compute_daily_top_hooks, update_profile_niches, clean_expired_video_cache,
-    queue_top_posts_for_analysis,
+    queue_top_posts_for_analysis, backfill_hook_patterns, recalculate_pattern_stats,
+    generate_viral_post_notifications,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -122,6 +123,13 @@ def run_daily_maintenance():
     except Exception as e:
         log.error(f"[MAINT] Niche update error: {e}")
 
+    log.info("[MAINT] Recalculating hook pattern stats...")
+    try:
+        recalculate_pattern_stats()
+        log.info("[MAINT] Pattern stats recalculated")
+    except Exception as e:
+        log.error(f"[MAINT] Pattern stats error: {e}")
+
     log.info("[MAINT] Cleaning expired video URL cache...")
     try:
         clean_expired_video_cache()
@@ -149,6 +157,13 @@ def run_daemon():
 
     PID_FILE.write_text(str(os.getpid()))
     log.info(f"Daemon started (PID {os.getpid()})")
+
+    # Backfill hook patterns on startup (idempotent)
+    try:
+        linked = backfill_hook_patterns()
+        log.info(f"[STARTUP] Hook patterns backfilled ({linked} posts linked)")
+    except Exception as e:
+        log.error(f"[STARTUP] Hook patterns backfill error: {e}")
 
     last_refresh = 0
 
@@ -273,6 +288,13 @@ def run_daemon():
                             try:
                                 ok = scrape_one(username, platform)
                                 log.info(f"{'done' if ok else 'error'} {platform}/@{username}")
+                                if ok:
+                                    try:
+                                        n = generate_viral_post_notifications(username, platform)
+                                        if n:
+                                            log.info(f"[NOTIFY] Sent {n} viral post notifications for @{username}")
+                                    except Exception as e:
+                                        log.error(f"[NOTIFY] Error generating notifications: {e}")
                             except Exception as e:
                                 log.error(f"Error scraping {platform}/@{username}: {e}")
 

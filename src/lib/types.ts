@@ -54,6 +54,8 @@ export interface Post {
   transcript: string | null;
   hook_analysis: HookAnalysis | null;
   analyzed_at: string | null;
+  audio_name: string | null;
+  audio_author: string | null;
 }
 
 export interface SuggestionHook {
@@ -77,13 +79,16 @@ export interface CreatorSuggestion {
 }
 
 export interface UserHook {
-  id: number;
-  canonical_template: string | null;
+  id: number;              // user_saved_patterns.id
+  pattern_id: number;
+  canonical_template: string;
   display_name: string | null;
   hook_type: string | null;
   niche: string | null;
   notes: string | null;
-  example_count: number;
+  example_count: number;   // global count from hook_patterns
+  avg_viral_score: number; // from hook_patterns
+  avg_views: number;       // from hook_patterns
   top_example: {
     post_id: number;
     thumbnail_url: string | null;
@@ -93,7 +98,7 @@ export interface UserHook {
     username: string;
     platform: string;
   } | null;
-  created_at: string;
+  saved_at: string;
 }
 
 export interface UserHookDetail extends UserHook {
@@ -110,8 +115,9 @@ export interface UserHookDetail extends UserHook {
     platform: string;
     avatar_url: string | null;
     hook_analysis: HookAnalysis | null;
-    added_at: string;
+    linked_at: string;
   }>;
+  total_examples: number;   // for pagination
 }
 
 export interface SavedPost {

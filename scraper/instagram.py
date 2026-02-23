@@ -259,6 +259,19 @@ def _fetch_profile_api(ctx, username: str) -> Optional[Dict]:
                     if candidates:
                         thumb = candidates[0].get("url", "")
 
+                    # Extract audio metadata from clips or music info
+                    audio_name = None
+                    audio_author = None
+                    clips_meta = item.get("clips_metadata", {}) or {}
+                    music_info = clips_meta.get("music_info") or item.get("music_metadata", {}) or {}
+                    music_asset = music_info.get("music_asset_info") or music_info.get("music_info", {}) or {}
+                    if music_asset.get("title"):
+                        audio_name = music_asset["title"]
+                    if music_asset.get("display_artist"):
+                        audio_author = music_asset["display_artist"]
+                    elif music_asset.get("ig_username"):
+                        audio_author = music_asset["ig_username"]
+
                     posts.append({
                         "platform_id": code,
                         "post_url": f"https://www.instagram.com/reel/{code}/" if is_video else f"https://www.instagram.com/p/{code}/",
@@ -271,6 +284,8 @@ def _fetch_profile_api(ctx, username: str) -> Optional[Dict]:
                         "is_video": bool(is_video),
                         "duration_seconds": item.get("video_duration"),
                         "posted_at": _ts_to_iso(item.get("taken_at")),
+                        "audio_name": audio_name,
+                        "audio_author": audio_author,
                     })
                 parsed["posts"] = posts
 

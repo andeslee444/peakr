@@ -346,6 +346,8 @@ def _parse_ytdlp_items(items: list[dict], username: str) -> list[dict]:
             'viral_score': viral,
             'posted_at': posted_at,
             'is_video': True,
+            'audio_name': item.get('track'),
+            'audio_author': item.get('artist'),
         })
 
     return videos

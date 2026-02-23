@@ -1,17 +1,27 @@
 'use client';
 
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
-import { useState } from 'react';
+import { usePathname, useRouter } from 'next/navigation';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { useSession, signOut } from 'next-auth/react';
 
 const navItems = [
-  { name: 'Tracked', href: '/dashboard', icon: '📊' },
   { name: 'Hook Lab', href: '/dashboard/hook-lab', icon: '🪝' },
-  { name: 'My Hooks', href: '/dashboard/saved', icon: '🪝' },
+  { name: 'Tracked', href: '/dashboard/tracked', icon: '📊' },
+  { name: 'My Hooks', href: '/dashboard/saved', icon: '📌' },
   { name: 'Playbook', href: '/dashboard/playbook', icon: '📖' },
+  { name: 'Analytics', href: '/dashboard/analytics', icon: '📈' },
   { name: 'Profile', href: '/dashboard/profile', icon: '👤' },
   { name: 'Account', href: '/dashboard/account', icon: '⚙️' },
+];
+
+// Bottom nav shows only the 5 most important items on mobile
+const mobileNavItems = [
+  { name: 'Lab', href: '/dashboard/hook-lab', icon: '🪝' },
+  { name: 'Tracked', href: '/dashboard/tracked', icon: '📊' },
+  { name: 'Hooks', href: '/dashboard/saved', icon: '📌' },
+  { name: 'Playbook', href: '/dashboard/playbook', icon: '📖' },
+  { name: 'More', href: '/dashboard/profile', icon: '⚙️' },
 ];
 
 export default function DashboardLayout({
@@ -20,8 +30,90 @@ export default function DashboardLayout({
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
+  const router = useRouter();
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const { data: session } = useSession();
+  const onboardingChecked = useRef(false);
+
+  // Redirect new users to onboarding (profile setup)
+  useEffect(() => {
+    if (onboardingChecked.current || pathname === '/dashboard/profile') return;
+    onboardingChecked.current = true;
+
+    fetch('/api/creator-profile')
+      .then(res => res.json())
+      .then(data => {
+        if (!data.profile || data.profile.onboarding_step !== 'complete') {
+          router.replace('/dashboard/profile');
+        }
+      })
+      .catch(() => {});
+  }, [pathname, router]);
+
+  // Notifications
+  interface Notification {
+    id: number;
+    type: string;
+    title: string;
+    body: string | null;
+    link: string | null;
+    read_at: string | null;
+    created_at: string;
+  }
+  const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [showNotifications, setShowNotifications] = useState(false);
+  const notifRef = useRef<HTMLDivElement>(null);
+
+  const fetchNotifications = useCallback(async () => {
+    try {
+      const res = await fetch('/api/notifications');
+      const data = await res.json();
+      setNotifications(data.notifications || []);
+      setUnreadCount(data.unread_count || 0);
+    } catch { /* ignore */ }
+  }, []);
+
+  useEffect(() => {
+    fetchNotifications();
+    const interval = setInterval(fetchNotifications, 60000); // poll every 60s
+    return () => clearInterval(interval);
+  }, [fetchNotifications]);
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    if (!showNotifications) return;
+    const handler = (e: MouseEvent) => {
+      if (notifRef.current && !notifRef.current.contains(e.target as Node)) {
+        setShowNotifications(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [showNotifications]);
+
+  const markAllRead = async () => {
+    try {
+      await fetch('/api/notifications', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mark_all: true }),
+      });
+      setNotifications(prev => prev.map(n => ({ ...n, read_at: n.read_at || new Date().toISOString() })));
+      setUnreadCount(0);
+    } catch { /* ignore */ }
+  };
+
+  const timeAgo = (dateStr: string) => {
+    const diff = Date.now() - new Date(dateStr).getTime();
+    const mins = Math.floor(diff / 60000);
+    if (mins < 1) return 'just now';
+    if (mins < 60) return `${mins}m ago`;
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return `${hrs}h ago`;
+    const days = Math.floor(hrs / 24);
+    return `${days}d ago`;
+  };
 
   const userInitial = session?.user?.name?.charAt(0)?.toUpperCase() || session?.user?.image ? null : '?';
 
@@ -53,7 +145,7 @@ export default function DashboardLayout({
         <nav className="px-4 space-y-1">
           {navItems.map((item) => {
             const isActive = pathname === item.href ||
-              (item.href !== '/dashboard' && pathname.startsWith(item.href));
+              pathname.startsWith(item.href + '/');
 
             return (
               <Link
@@ -104,11 +196,63 @@ export default function DashboardLayout({
           </div>
 
           <div className="flex items-center space-x-4">
-            <button className="p-2 text-gray-500 hover:text-gray-700">
-              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
-              </svg>
-            </button>
+            {/* Notifications bell */}
+            <div className="relative" ref={notifRef}>
+              <button
+                className="p-2 text-gray-500 hover:text-gray-700 relative"
+                onClick={() => setShowNotifications(!showNotifications)}
+              >
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+                </svg>
+                {unreadCount > 0 && (
+                  <span className="absolute -top-0.5 -right-0.5 w-5 h-5 bg-red-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center">
+                    {unreadCount > 9 ? '9+' : unreadCount}
+                  </span>
+                )}
+              </button>
+              {showNotifications && (
+                <div className="absolute right-0 top-11 w-[calc(100vw-2rem)] sm:w-80 max-w-sm bg-white rounded-xl border border-gray-200 shadow-xl z-50 overflow-hidden">
+                  <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
+                    <h3 className="font-semibold text-sm text-gray-900">Notifications</h3>
+                    {unreadCount > 0 && (
+                      <button
+                        onClick={markAllRead}
+                        className="text-xs text-indigo-600 hover:text-indigo-700 font-medium"
+                      >
+                        Mark all read
+                      </button>
+                    )}
+                  </div>
+                  <div className="max-h-80 overflow-y-auto">
+                    {notifications.length === 0 ? (
+                      <div className="px-4 py-8 text-center text-sm text-gray-400">
+                        No notifications yet
+                      </div>
+                    ) : (
+                      notifications.map(n => (
+                        <div
+                          key={n.id}
+                          className={`px-4 py-3 border-b border-gray-50 hover:bg-gray-50 cursor-pointer transition-colors ${!n.read_at ? 'bg-indigo-50/50' : ''}`}
+                          onClick={() => {
+                            if (n.link) router.push(n.link);
+                            setShowNotifications(false);
+                          }}
+                        >
+                          <p className={`text-sm ${!n.read_at ? 'font-medium text-gray-900' : 'text-gray-700'}`}>
+                            {n.title}
+                          </p>
+                          {n.body && (
+                            <p className="text-xs text-gray-500 mt-0.5 line-clamp-2">{n.body}</p>
+                          )}
+                          <p className="text-[10px] text-gray-400 mt-1">{timeAgo(n.created_at)}</p>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
             {session?.user?.image ? (
               <img
                 src={session.user.image}
@@ -122,7 +266,7 @@ export default function DashboardLayout({
             )}
             <button
               onClick={() => signOut({ callbackUrl: '/' })}
-              className="text-sm text-gray-500 hover:text-gray-700"
+              className="text-sm text-gray-500 hover:text-gray-700 hidden sm:block"
             >
               Sign out
             </button>
@@ -130,10 +274,32 @@ export default function DashboardLayout({
         </header>
 
         {/* Page content */}
-        <main className="p-6">
+        <main className="p-4 sm:p-6 pb-24 lg:pb-6">
           {children}
         </main>
       </div>
+
+      {/* Mobile bottom navigation */}
+      <nav className="fixed bottom-0 left-0 right-0 z-40 bg-white border-t border-gray-200 lg:hidden">
+        <div className="flex items-center justify-around px-2 py-1">
+          {mobileNavItems.map((item) => {
+            const isActive = pathname === item.href ||
+              pathname.startsWith(item.href + '/');
+            return (
+              <Link
+                key={item.name}
+                href={item.href}
+                className={`flex flex-col items-center py-2 px-3 rounded-lg transition-colors min-w-0 ${
+                  isActive ? 'text-indigo-600' : 'text-gray-400'
+                }`}
+              >
+                <span className="text-lg">{item.icon}</span>
+                <span className="text-[10px] font-medium mt-0.5">{item.name}</span>
+              </Link>
+            );
+          })}
+        </div>
+      </nav>
     </div>
   );
 }

@@ -26,7 +26,29 @@ export async function GET(
       [profile.id]
     );
 
-    return NextResponse.json({ profile, posts });
+    // Hook type breakdown
+    const { rows: hookTypes } = await pool.query(`
+      SELECT p.hook_analysis->>'hook_type' AS hook_type, COUNT(*)::int AS count
+      FROM posts p
+      WHERE p.profile_id = $1 AND p.hook_analysis->>'hook_type' IS NOT NULL
+      GROUP BY p.hook_analysis->>'hook_type'
+      ORDER BY count DESC
+    `, [profile.id]);
+
+    // Viral score stats
+    const { rows: [stats] } = await pool.query(`
+      SELECT COUNT(*)::int AS total_posts,
+             COUNT(CASE WHEN analyzed_at IS NOT NULL THEN 1 END)::int AS analyzed_posts,
+             COALESCE(AVG(viral_score), 0) AS avg_viral,
+             COALESCE(MAX(viral_score), 0) AS max_viral,
+             COALESCE(AVG(views), 0) AS avg_views,
+             COALESCE(MAX(views), 0) AS max_views,
+             COUNT(CASE WHEN viral_score >= 2 THEN 1 END)::int AS viral_2x,
+             COUNT(CASE WHEN viral_score >= 5 THEN 1 END)::int AS viral_5x
+      FROM posts WHERE profile_id = $1
+    `, [profile.id]);
+
+    return NextResponse.json({ profile, posts, hook_types: hookTypes, stats });
   } catch {
     return NextResponse.json({ error: 'Failed to fetch profile' }, { status: 500 });
   }

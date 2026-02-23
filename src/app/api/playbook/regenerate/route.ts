@@ -12,9 +12,9 @@ export async function POST(request: NextRequest) {
   const body = await request.json();
   const { hook_type, niche, section_id } = body;
 
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  const apiKey = process.env.DEEPSEEK_API_KEY;
   if (!apiKey) {
-    return NextResponse.json({ error: 'API key not configured' }, { status: 500 });
+    return NextResponse.json({ error: 'DeepSeek API key not configured' }, { status: 500 });
   }
 
   const pool = getPool();
@@ -55,18 +55,18 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // Get hooks from user_hooks → user_hook_examples → posts
-  const conditions: string[] = ['uh.user_id = $1'];
+  // Get hooks from user_saved_patterns → hook_patterns → hook_pattern_posts → posts
+  const conditions: string[] = ['usp.user_id = $1'];
   const params: (string | number)[] = [userId];
   let paramIdx = 2;
 
   if (targetType) {
-    conditions.push(`(uh.hook_type = $${paramIdx} OR p.hook_analysis->>'hook_type' = $${paramIdx})`);
+    conditions.push(`(hp.hook_type = $${paramIdx} OR p.hook_analysis->>'hook_type' = $${paramIdx})`);
     params.push(targetType);
     paramIdx++;
   }
   if (targetNiche) {
-    conditions.push(`(uh.niche = $${paramIdx} OR p.hook_analysis->>'niche' = $${paramIdx})`);
+    conditions.push(`(hp.niche = $${paramIdx} OR p.hook_analysis->>'niche' = $${paramIdx})`);
     params.push(targetNiche);
     paramIdx++;
   }
@@ -74,9 +74,10 @@ export async function POST(request: NextRequest) {
   const hooksRes = await pool.query(`
     SELECT DISTINCT ON (p.id) p.id, p.description, p.hook_analysis, p.views, p.likes, p.viral_score,
            pr.username, pr.platform
-    FROM user_hooks uh
-    JOIN user_hook_examples uhe ON uhe.user_hook_id = uh.id
-    JOIN posts p ON uhe.post_id = p.id
+    FROM user_saved_patterns usp
+    JOIN hook_patterns hp ON usp.pattern_id = hp.id
+    JOIN hook_pattern_posts hpp ON hpp.pattern_id = hp.id
+    JOIN posts p ON hpp.post_id = p.id
     JOIN profiles pr ON p.profile_id = pr.id
     WHERE ${conditions.join(' AND ')}
       AND p.hook_analysis IS NOT NULL
@@ -108,20 +109,8 @@ export async function POST(request: NextRequest) {
 
   const sectionLabel = [targetType, targetNiche].filter(Boolean).join(' + ');
 
-  const prompt = `You are a viral content strategist helping a creator build a personalized hook playbook.
-
-CREATOR PROFILE:
-- Niche: ${profile.niche || 'not specified'}
-- Content style: ${profile.content_style || 'not specified'}
-- Target audience: ${profile.target_audience || 'not specified'}
-- Unique angle/background: ${profile.unique_angle || 'not specified'}
-- Platforms: ${profile.platforms ? JSON.parse(profile.platforms).join(', ') : 'not specified'}
-
-CREATOR BACKGROUND:
-${bgQA}
-
-SAVED HOOKS (${sectionLabel}):
-${hookExamples}
+  // Static system message — identical across all calls, maximizes DeepSeek prefix caching
+  const systemMessage = `You are a viral content strategist helping a creator build a personalized hook playbook.
 
 Based on the hooks this creator saved and their unique background, generate a playbook section.
 
@@ -137,40 +126,48 @@ Return a JSON object with these fields:
   "why_it_works": "2-3 sentences explaining why these hooks work especially well for THIS creator given their background and audience."
 }
 
-Generate exactly 3 templates in the templates array. Make them specific to the creator's niche, angle, and audience. Use details from their background answers.
-
+Generate exactly 3 templates. Make them specific to the creator's niche, angle, and audience.
 Return ONLY the JSON object, no other text.`;
 
+  // Dynamic user message — varies per call
+  const userMessage = `CREATOR PROFILE:
+- Niche: ${profile.niche || 'not specified'}
+- Content style: ${profile.content_style || 'not specified'}
+- Target audience: ${profile.target_audience || 'not specified'}
+- Unique angle/background: ${profile.unique_angle || 'not specified'}
+- Platforms: ${profile.platforms || 'not specified'}
+
+CREATOR BACKGROUND:
+${bgQA}
+
+SAVED HOOKS (${sectionLabel}):
+${hookExamples}`;
+
   try {
-    const resp = await fetch('https://api.anthropic.com/v1/messages', {
+    const resp = await fetch('https://api.deepseek.com/chat/completions', {
       method: 'POST',
       headers: {
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
-        'content-type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-6',
-        max_tokens: 1024,
-        messages: [{ role: 'user', content: prompt }],
+        model: 'deepseek-chat',
+        messages: [
+          { role: 'system', content: systemMessage },
+          { role: 'user', content: userMessage },
+        ],
+        response_format: { type: 'json_object' },
       }),
     });
 
     if (!resp.ok) {
       const errText = await resp.text();
-      console.error('Claude API error:', errText.slice(0, 300));
+      console.error('DeepSeek API error:', errText.slice(0, 300));
       return NextResponse.json({ error: 'AI generation failed' }, { status: 500 });
     }
 
     const data = await resp.json();
-    let text = data.content[0].text.trim();
-
-    // Parse JSON from response (handle markdown code blocks)
-    if (text.startsWith('```')) {
-      text = text.split('\n').slice(1).join('\n');
-      text = text.replace(/```$/, '').trim();
-    }
-
+    const text = data.choices[0].message.content.trim();
     const generated = JSON.parse(text);
     const sourcePostIds = savedHooks.map((h: { id: number }) => h.id);
 

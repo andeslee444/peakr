@@ -1,9 +1,11 @@
 /**
- * One-time migration: saved_hooks → user_hooks + user_hook_examples
+ * Two-step migration: global hook_patterns + user_saved_patterns
  *
- * Run: npx tsx scripts/migrate-hooks.ts
+ * Step 1 — Backfill global patterns: For every analyzed post with a hook_template,
+ *          normalize and upsert into hook_patterns + link via hook_pattern_posts.
+ * Step 2 — Migrate user saves: Convert user_hooks → user_saved_patterns.
  *
- * Requires DATABASE_URL in env.
+ * Run: DATABASE_URL=... npx tsx scripts/migrate-hooks.ts
  */
 
 import pg from 'pg';
@@ -29,108 +31,125 @@ async function main() {
   const client = await pool.connect();
 
   try {
-    // Get all saved_hooks joined with posts
-    const { rows: savedHooks } = await client.query(`
-      SELECT sh.user_id, sh.post_id, sh.notes,
-             p.hook_analysis, p.id AS post_id_check
-      FROM saved_hooks sh
-      JOIN posts p ON sh.post_id = p.id
-      ORDER BY sh.user_id, sh.saved_at
+    // ======= STEP 1: Backfill global hook_patterns from all analyzed posts =======
+    console.log('\n=== Step 1: Backfill global hook_patterns ===\n');
+
+    const { rows: analyzedPosts } = await client.query(`
+      SELECT id, hook_analysis, viral_score, views
+      FROM posts
+      WHERE analyzed_at IS NOT NULL
+        AND hook_analysis->>'hook_template' IS NOT NULL
     `);
 
-    console.log(`Found ${savedHooks.length} saved_hooks rows to migrate`);
-
-    // Group by (user_id, normalized template)
-    const groups = new Map<string, { user_id: number; canonical: string | null; template: string | null; hook_type: string | null; niche: string | null; notes: string | null; post_ids: number[] }>();
-
-    for (const sh of savedHooks) {
-      const analysis = sh.hook_analysis;
-      const rawTemplate = analysis?.hook_template ? String(analysis.hook_template) : null;
-      const canonical = rawTemplate ? normalizeTemplate(rawTemplate) : null;
-      const hookType = analysis?.hook_type || null;
-      const niche = analysis?.niche || null;
-
-      // Group key: user_id + canonical (or unique per null entry)
-      const key = canonical
-        ? `${sh.user_id}::${canonical}`
-        : `${sh.user_id}::null::${sh.post_id}`;
-
-      if (!groups.has(key)) {
-        groups.set(key, {
-          user_id: sh.user_id,
-          canonical,
-          template: rawTemplate,
-          hook_type: hookType,
-          niche,
-          notes: sh.notes,
-          post_ids: [],
-        });
-      }
-      groups.get(key)!.post_ids.push(sh.post_id);
-    }
-
-    console.log(`Grouped into ${groups.size} patterns`);
-
-    let migrated = 0;
-    let skipped = 0;
+    console.log(`Found ${analyzedPosts.length} analyzed posts with hook_templates`);
 
     await client.query('BEGIN');
 
-    for (const group of groups.values()) {
-      try {
-        // Check if pattern already exists
-        let hookId: number;
+    let patternsCreated = 0;
+    let postsLinked = 0;
 
-        if (group.canonical) {
-          const { rows: existing } = await client.query(
-            `SELECT id FROM user_hooks WHERE user_id = $1 AND canonical_template = $2`,
-            [group.user_id, group.canonical]
-          );
+    for (const post of analyzedPosts) {
+      const rawTemplate = post.hook_analysis?.hook_template;
+      if (!rawTemplate) continue;
 
-          if (existing.length > 0) {
-            hookId = existing[0].id;
-          } else {
-            const { rows: [newHook] } = await client.query(
-              `INSERT INTO user_hooks (user_id, canonical_template, display_name, hook_type, niche, notes)
-               VALUES ($1, $2, $3, $4, $5, $6)
-               RETURNING id`,
-              [group.user_id, group.canonical, group.template, group.hook_type, group.niche, group.notes]
-            );
-            hookId = newHook.id;
-          }
-        } else {
-          const { rows: [newHook] } = await client.query(
-            `INSERT INTO user_hooks (user_id, canonical_template, display_name, hook_type, niche, notes)
-             VALUES ($1, NULL, NULL, $2, $3, $4)
-             RETURNING id`,
-            [group.user_id, group.hook_type, group.niche, group.notes]
-          );
-          hookId = newHook.id;
-        }
+      const canonical = normalizeTemplate(String(rawTemplate));
+      if (!canonical) continue;
 
-        // Add examples
-        for (const postId of group.post_ids) {
-          await client.query(
-            `INSERT INTO user_hook_examples (user_hook_id, post_id)
-             VALUES ($1, $2)
-             ON CONFLICT (user_hook_id, post_id) DO NOTHING`,
-            [hookId, postId]
-          );
-        }
+      const hookType = post.hook_analysis?.hook_type || null;
+      const niche = post.hook_analysis?.niche || null;
 
-        migrated++;
-      } catch (err) {
-        console.error(`Error migrating group for user ${group.user_id}:`, err);
-        skipped++;
+      // Upsert pattern
+      const { rows: [pattern] } = await client.query(
+        `INSERT INTO hook_patterns (canonical_template, display_name, hook_type, niche)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (canonical_template) DO UPDATE SET updated_at = NOW()
+         RETURNING id, (xmax = 0) AS is_new`,
+        [canonical, String(rawTemplate), hookType, niche]
+      );
+
+      if (pattern.is_new) patternsCreated++;
+
+      // Link post to pattern
+      const { rowCount } = await client.query(
+        `INSERT INTO hook_pattern_posts (pattern_id, post_id)
+         VALUES ($1, $2)
+         ON CONFLICT (pattern_id, post_id) DO NOTHING`,
+        [pattern.id, post.id]
+      );
+
+      if (rowCount && rowCount > 0) postsLinked++;
+    }
+
+    // Bulk recalculate all pattern stats
+    await client.query(`
+      UPDATE hook_patterns hp SET
+        example_count = COALESCE(sub.cnt, 0),
+        avg_viral_score = COALESCE(sub.avg_vs, 0),
+        avg_views = COALESCE(sub.avg_v, 0),
+        updated_at = NOW()
+      FROM (
+        SELECT hpp.pattern_id,
+               COUNT(*) AS cnt,
+               AVG(p.viral_score) AS avg_vs,
+               AVG(p.views) AS avg_v
+        FROM hook_pattern_posts hpp
+        JOIN posts p ON hpp.post_id = p.id
+        GROUP BY hpp.pattern_id
+      ) sub
+      WHERE hp.id = sub.pattern_id
+    `);
+
+    await client.query('COMMIT');
+
+    console.log(`  Patterns created: ${patternsCreated}`);
+    console.log(`  Posts linked: ${postsLinked}`);
+
+    // ======= STEP 2: Migrate user saves (user_hooks → user_saved_patterns) =======
+    console.log('\n=== Step 2: Migrate user saves ===\n');
+
+    const { rows: userHooks } = await client.query(`
+      SELECT uh.user_id, uh.canonical_template, uh.notes
+      FROM user_hooks uh
+      WHERE uh.canonical_template IS NOT NULL
+    `);
+
+    console.log(`Found ${userHooks.length} user_hooks rows with canonical_template`);
+
+    await client.query('BEGIN');
+
+    let savesMigrated = 0;
+    let savesSkipped = 0;
+
+    for (const uh of userHooks) {
+      // Find matching global pattern
+      const { rows: patterns } = await client.query(
+        'SELECT id FROM hook_patterns WHERE canonical_template = $1',
+        [uh.canonical_template]
+      );
+
+      if (patterns.length === 0) {
+        savesSkipped++;
+        continue;
       }
+
+      const patternId = patterns[0].id;
+
+      await client.query(
+        `INSERT INTO user_saved_patterns (user_id, pattern_id, notes)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (user_id, pattern_id) DO NOTHING`,
+        [uh.user_id, patternId, uh.notes]
+      );
+
+      savesMigrated++;
     }
 
     await client.query('COMMIT');
 
-    console.log(`\nMigration complete:`);
-    console.log(`  Patterns migrated: ${migrated}`);
-    console.log(`  Skipped (errors): ${skipped}`);
-    console.log(`  Total examples: ${savedHooks.length}`);
+    console.log(`  Saves migrated: ${savesMigrated}`);
+    console.log(`  Saves skipped (no pattern match): ${savesSkipped}`);
+
+    console.log('\nMigration complete!');
   } catch (err) {
     await client.query('ROLLBACK');
     console.error('Migration failed:', err);

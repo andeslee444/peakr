@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { useRouter } from 'next/navigation';
 import type { CreatorSuggestion } from '@/lib/types';
 import { HookTypeBadge, HookScoreBadge } from '@/components/HookBadge';
 import { formatNumber, proxyImg } from '@/lib/format';
@@ -28,6 +29,7 @@ interface CreatorProfile {
 }
 
 export default function ProfilePage() {
+  const router = useRouter();
   const [profile, setProfile] = useState<CreatorProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -173,7 +175,8 @@ export default function ProfilePage() {
 
   const handleCompleteSuggestions = async () => {
     await saveProfile({ onboarding_step: 'complete' });
-    setStep('complete');
+    const userNiche = profile?.niche || (niche === 'other' ? customNiche : niche);
+    router.push(userNiche ? `/dashboard/hook-lab?niche=${encodeURIComponent(userNiche)}` : '/dashboard/hook-lab');
   };
 
   const submittingRound1 = useRef(false);
@@ -573,6 +576,16 @@ export default function ProfilePage() {
           className="w-full px-6 py-3 bg-indigo-600 text-white rounded-xl font-semibold hover:bg-indigo-700 transition-colors disabled:opacity-50"
         >
           {saving ? 'Saving...' : 'Continue \u2192'}
+        </button>
+
+        <button
+          onClick={async () => {
+            await saveProfile({ onboarding_step: 'complete' });
+            router.push('/dashboard/hook-lab');
+          }}
+          className="w-full text-center text-sm text-gray-400 hover:text-gray-600 transition-colors"
+        >
+          Skip for now
         </button>
       </div>
     </div>

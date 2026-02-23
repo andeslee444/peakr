@@ -13,64 +13,89 @@ export async function GET(
 
   const userId = Number(session.user.id);
   const { id } = await params;
-  const hookId = parseInt(id, 10);
+  const patternId = parseInt(id, 10);
 
-  if (isNaN(hookId)) {
-    return NextResponse.json({ error: 'Invalid hook ID' }, { status: 400 });
+  if (isNaN(patternId)) {
+    return NextResponse.json({ error: 'Invalid pattern ID' }, { status: 400 });
   }
+
+  const { searchParams } = new URL(request.url);
+  const limit = Math.min(parseInt(searchParams.get('limit') || '20', 10) || 20, 100);
+  const offset = parseInt(searchParams.get('offset') || '0', 10) || 0;
 
   const pool = getPool();
 
   try {
-    // Get the hook
+    // Verify user has saved this pattern and get pattern data
     const { rows: [hook] } = await pool.query(`
-      SELECT uh.id, uh.canonical_template, uh.display_name, uh.hook_type, uh.niche,
-             uh.notes, uh.created_at,
-             COUNT(uhe.id)::int AS example_count
-      FROM user_hooks uh
-      LEFT JOIN user_hook_examples uhe ON uhe.user_hook_id = uh.id
-      WHERE uh.id = $1 AND uh.user_id = $2
-      GROUP BY uh.id
-    `, [hookId, userId]);
+      SELECT usp.id, hp.id AS pattern_id, hp.canonical_template, hp.display_name,
+             hp.hook_type, hp.niche, usp.notes, usp.saved_at,
+             hp.example_count, hp.avg_viral_score, hp.avg_views
+      FROM user_saved_patterns usp
+      JOIN hook_patterns hp ON usp.pattern_id = hp.id
+      WHERE hp.id = $1 AND usp.user_id = $2
+    `, [patternId, userId]);
 
     if (!hook) {
-      return NextResponse.json({ error: 'Hook not found' }, { status: 404 });
+      return NextResponse.json({ error: 'Saved pattern not found' }, { status: 404 });
     }
 
-    // Get all examples with full post data
+    // Get top example
+    const { rows: topRows } = await pool.query(`
+      SELECT p.id AS post_id, p.thumbnail_url, p.s3_thumbnail_url,
+             p.viral_score, p.views, pr.username, pr.platform
+      FROM hook_pattern_posts hpp
+      JOIN posts p ON hpp.post_id = p.id
+      JOIN profiles pr ON p.profile_id = pr.id
+      WHERE hpp.pattern_id = $1
+      ORDER BY p.viral_score DESC
+      LIMIT 1
+    `, [patternId]);
+
+    const topExample = topRows.length > 0 ? topRows[0] : null;
+
+    // Get paginated examples
     const { rows: examples } = await pool.query(`
       SELECT p.id AS post_id, p.post_url, p.thumbnail_url, p.s3_thumbnail_url,
              p.description, p.views, p.likes, p.viral_score,
              pr.username, pr.platform, pr.avatar_url,
-             p.hook_analysis, uhe.added_at
-      FROM user_hook_examples uhe
-      JOIN posts p ON uhe.post_id = p.id
+             p.hook_analysis, hpp.linked_at
+      FROM hook_pattern_posts hpp
+      JOIN posts p ON hpp.post_id = p.id
       JOIN profiles pr ON p.profile_id = pr.id
-      WHERE uhe.user_hook_id = $1
+      WHERE hpp.pattern_id = $1
       ORDER BY p.viral_score DESC
-    `, [hookId]);
+      LIMIT $2 OFFSET $3
+    `, [patternId, limit, offset]);
 
-    // Get top example
-    const topExample = examples.length > 0 ? {
-      post_id: examples[0].post_id,
-      thumbnail_url: examples[0].thumbnail_url,
-      s3_thumbnail_url: examples[0].s3_thumbnail_url,
-      viral_score: examples[0].viral_score,
-      views: examples[0].views,
-      username: examples[0].username,
-      platform: examples[0].platform,
-    } : null;
+    // Get total count for pagination
+    const { rows: [countRow] } = await pool.query(
+      'SELECT COUNT(*)::int AS total FROM hook_pattern_posts WHERE pattern_id = $1',
+      [patternId]
+    );
+
+    // Get collection IDs this pattern belongs to (for the current user)
+    const { rows: collRows } = await pool.query(
+      `SELECT hcp.collection_id
+       FROM hook_collection_patterns hcp
+       JOIN hook_collections hc ON hcp.collection_id = hc.id
+       WHERE hcp.pattern_id = $1 AND hc.user_id = $2`,
+      [patternId, userId]
+    );
+    const collection_ids = collRows.map(r => r.collection_id);
 
     return NextResponse.json({
       hook: {
         ...hook,
         top_example: topExample,
         examples,
+        total_examples: countRow.total,
+        collection_ids,
       },
     });
   } catch (err) {
     console.error('user-hooks [id] GET error:', err);
-    return NextResponse.json({ error: 'Failed to fetch hook' }, { status: 500 });
+    return NextResponse.json({ error: 'Failed to fetch pattern' }, { status: 500 });
   }
 }
 
@@ -85,49 +110,34 @@ export async function PATCH(
 
   const userId = Number(session.user.id);
   const { id } = await params;
-  const hookId = parseInt(id, 10);
+  const patternId = parseInt(id, 10);
 
-  if (isNaN(hookId)) {
-    return NextResponse.json({ error: 'Invalid hook ID' }, { status: 400 });
+  if (isNaN(patternId)) {
+    return NextResponse.json({ error: 'Invalid pattern ID' }, { status: 400 });
   }
 
   const body = await request.json();
-  const { display_name, notes } = body;
+  const { notes } = body;
 
-  const pool = getPool();
-  const updates: string[] = [];
-  const values: (string | number)[] = [];
-  let paramIdx = 1;
-
-  if (display_name !== undefined) {
-    updates.push(`display_name = $${paramIdx++}`);
-    values.push(display_name);
-  }
-  if (notes !== undefined) {
-    updates.push(`notes = $${paramIdx++}`);
-    values.push(notes);
-  }
-
-  if (updates.length === 0) {
+  if (notes === undefined) {
     return NextResponse.json({ error: 'Nothing to update' }, { status: 400 });
   }
 
-  updates.push('updated_at = NOW()');
-  values.push(hookId, userId);
+  const pool = getPool();
 
   try {
     const { rowCount } = await pool.query(
-      `UPDATE user_hooks SET ${updates.join(', ')} WHERE id = $${paramIdx++} AND user_id = $${paramIdx}`,
-      values
+      `UPDATE user_saved_patterns SET notes = $1 WHERE pattern_id = $2 AND user_id = $3`,
+      [notes, patternId, userId]
     );
 
     if (rowCount === 0) {
-      return NextResponse.json({ error: 'Hook not found' }, { status: 404 });
+      return NextResponse.json({ error: 'Saved pattern not found' }, { status: 404 });
     }
 
     return NextResponse.json({ success: true });
   } catch (err) {
     console.error('user-hooks [id] PATCH error:', err);
-    return NextResponse.json({ error: 'Failed to update hook' }, { status: 500 });
+    return NextResponse.json({ error: 'Failed to update notes' }, { status: 500 });
   }
 }

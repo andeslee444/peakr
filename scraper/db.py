@@ -1,6 +1,8 @@
 """PostgreSQL database layer for Peakr."""
 
 import os
+import re
+import json
 import psycopg2
 import psycopg2.extras
 from datetime import datetime
@@ -175,6 +177,65 @@ CREATE TABLE IF NOT EXISTS user_hook_examples (
   added_at TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE(user_hook_id, post_id)
 );
+
+CREATE TABLE IF NOT EXISTS hook_patterns (
+  id SERIAL PRIMARY KEY,
+  canonical_template TEXT UNIQUE NOT NULL,
+  display_name TEXT,
+  hook_type TEXT,
+  niche TEXT,
+  example_count INTEGER DEFAULT 0,
+  avg_viral_score REAL DEFAULT 0,
+  avg_views REAL DEFAULT 0,
+  first_seen_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS hook_pattern_posts (
+  id SERIAL PRIMARY KEY,
+  pattern_id INTEGER NOT NULL REFERENCES hook_patterns(id) ON DELETE CASCADE,
+  post_id INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+  linked_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(pattern_id, post_id)
+);
+
+CREATE TABLE IF NOT EXISTS user_saved_patterns (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  pattern_id INTEGER NOT NULL REFERENCES hook_patterns(id) ON DELETE CASCADE,
+  notes TEXT,
+  saved_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(user_id, pattern_id)
+);
+
+CREATE TABLE IF NOT EXISTS hook_collections (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(user_id, name)
+);
+
+CREATE TABLE IF NOT EXISTS hook_collection_patterns (
+  id SERIAL PRIMARY KEY,
+  collection_id INTEGER NOT NULL REFERENCES hook_collections(id) ON DELETE CASCADE,
+  pattern_id INTEGER NOT NULL REFERENCES hook_patterns(id) ON DELETE CASCADE,
+  added_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(collection_id, pattern_id)
+);
+
+CREATE TABLE IF NOT EXISTS notifications (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  type TEXT NOT NULL,
+  title TEXT NOT NULL,
+  body TEXT,
+  link TEXT,
+  read_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_notifications_user_id ON notifications(user_id);
+CREATE INDEX IF NOT EXISTS idx_notifications_created_at ON notifications(created_at DESC);
 """
 
 
@@ -191,6 +252,17 @@ def init_db():
     conn.commit()
     cur.close()
     conn.close()
+
+
+def normalize_hook_template(raw: str) -> str:
+    """Normalize a hook template for deduplication.
+    Must produce identical output to src/lib/normalize-template.ts.
+    """
+    s = raw.strip().lower()
+    s = re.sub(r'\s+', ' ', s)
+    s = re.sub(r'\.{2,}$', '', s)
+    s = re.sub(r'[.,!?]+$', '', s)
+    return s.strip()
 
 
 def add_profile(username: str, platform: str = 'tiktok') -> int:
@@ -256,20 +328,24 @@ def add_posts(profile_id: int, posts: list[dict]):
     for p in posts:
         cur.execute("""
             INSERT INTO posts (profile_id, platform_id, post_url, thumbnail_url, description,
-                              views, likes, comments, shares, duration_seconds, is_video, viral_score, posted_at, scraped_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                              views, likes, comments, shares, duration_seconds, is_video, viral_score,
+                              posted_at, scraped_at, audio_name, audio_author)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT(profile_id, platform_id) DO UPDATE SET
                 views=EXCLUDED.views, likes=EXCLUDED.likes, comments=EXCLUDED.comments,
                 shares=EXCLUDED.shares, viral_score=EXCLUDED.viral_score, scraped_at=EXCLUDED.scraped_at,
                 thumbnail_url=EXCLUDED.thumbnail_url, description=EXCLUDED.description,
                 is_video=EXCLUDED.is_video, duration_seconds=EXCLUDED.duration_seconds,
-                post_url=EXCLUDED.post_url
+                post_url=EXCLUDED.post_url,
+                audio_name=COALESCE(EXCLUDED.audio_name, posts.audio_name),
+                audio_author=COALESCE(EXCLUDED.audio_author, posts.audio_author)
         """, (
             profile_id, p.get('platform_id', ''), p.get('post_url', ''),
             p.get('thumbnail_url', ''), p.get('description', ''),
             p.get('views', 0), p.get('likes', 0), p.get('comments', 0),
             p.get('shares', 0), p.get('duration_seconds', 0), p.get('is_video', False),
-            p.get('viral_score', 0), p.get('posted_at'), datetime.utcnow().isoformat()
+            p.get('viral_score', 0), p.get('posted_at'), datetime.utcnow().isoformat(),
+            p.get('audio_name'), p.get('audio_author'),
         ))
     conn.commit()
     cur.close()
@@ -313,6 +389,19 @@ def log_scrape(profile_id: int, status: str, posts_found: int = 0,
         INSERT INTO scrape_log (profile_id, status, posts_found, error_message, duration_ms)
         VALUES (%s, %s, %s, %s, %s)
     """, (profile_id, status, posts_found, error_message, duration_ms))
+    conn.commit()
+    cur.close()
+    conn.close()
+
+
+def migrate_audio_columns():
+    """Add audio metadata columns to posts table."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        ALTER TABLE posts ADD COLUMN IF NOT EXISTS audio_name TEXT;
+        ALTER TABLE posts ADD COLUMN IF NOT EXISTS audio_author TEXT;
+    """)
     conn.commit()
     cur.close()
     conn.close()
@@ -376,8 +465,7 @@ def get_unanalyzed_viral_posts(threshold: float = 1.5, limit: int = 10) -> list[
 
 def save_hook_analysis(post_id: int, transcript: str, hook_analysis_dict: dict,
                        keyframe_base64: Optional[str] = None):
-    """Save hook analysis results to a post."""
-    import json
+    """Save hook analysis results to a post, and link to global hook_patterns."""
     conn = get_conn()
     cur = conn.cursor()
     if keyframe_base64:
@@ -391,6 +479,46 @@ def save_hook_analysis(post_id: int, transcript: str, hook_analysis_dict: dict,
             UPDATE posts SET transcript = %s, hook_analysis = %s, analyzed_at = NOW()
             WHERE id = %s
         """, (transcript, json.dumps(hook_analysis_dict), post_id))
+
+    # Link post to global hook_patterns
+    raw_template = hook_analysis_dict.get('hook_template')
+    if raw_template:
+        canonical = normalize_hook_template(str(raw_template))
+        if canonical:
+            hook_type = hook_analysis_dict.get('hook_type')
+            niche = hook_analysis_dict.get('niche')
+            # Upsert pattern
+            cur.execute("""
+                INSERT INTO hook_patterns (canonical_template, display_name, hook_type, niche)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (canonical_template) DO UPDATE SET updated_at = NOW()
+                RETURNING id
+            """, (canonical, str(raw_template), hook_type, niche))
+            pattern_id = cur.fetchone()[0]
+            # Link post to pattern
+            cur.execute("""
+                INSERT INTO hook_pattern_posts (pattern_id, post_id)
+                VALUES (%s, %s)
+                ON CONFLICT (pattern_id, post_id) DO NOTHING
+            """, (pattern_id, post_id))
+            # Update stats incrementally
+            cur.execute("""
+                UPDATE hook_patterns SET
+                    example_count = sub.cnt,
+                    avg_viral_score = sub.avg_vs,
+                    avg_views = sub.avg_v,
+                    updated_at = NOW()
+                FROM (
+                    SELECT COUNT(*) AS cnt,
+                           COALESCE(AVG(p.viral_score), 0) AS avg_vs,
+                           COALESCE(AVG(p.views), 0) AS avg_v
+                    FROM hook_pattern_posts hpp
+                    JOIN posts p ON hpp.post_id = p.id
+                    WHERE hpp.pattern_id = %s
+                ) sub
+                WHERE hook_patterns.id = %s
+            """, (pattern_id, pattern_id))
+
     conn.commit()
     cur.close()
     conn.close()
@@ -609,6 +737,157 @@ def recalculate_viral_scores(profile_id: int):
     conn.close()
 
 
+def backfill_hook_patterns():
+    """Scan all existing analyzed posts with hook_template and populate
+    hook_patterns + hook_pattern_posts. Safe to run multiple times."""
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute("""
+        SELECT id, hook_analysis, viral_score, views
+        FROM posts
+        WHERE analyzed_at IS NOT NULL
+          AND hook_analysis->>'hook_template' IS NOT NULL
+    """)
+    rows = cur.fetchall()
+    cur2 = conn.cursor()
+    linked = 0
+    for row in rows:
+        raw_template = row['hook_analysis'].get('hook_template')
+        if not raw_template:
+            continue
+        canonical = normalize_hook_template(str(raw_template))
+        if not canonical:
+            continue
+        hook_type = row['hook_analysis'].get('hook_type')
+        niche = row['hook_analysis'].get('niche')
+        cur2.execute("""
+            INSERT INTO hook_patterns (canonical_template, display_name, hook_type, niche)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (canonical_template) DO UPDATE SET updated_at = NOW()
+            RETURNING id
+        """, (canonical, str(raw_template), hook_type, niche))
+        pattern_id = cur2.fetchone()[0]
+        cur2.execute("""
+            INSERT INTO hook_pattern_posts (pattern_id, post_id)
+            VALUES (%s, %s)
+            ON CONFLICT (pattern_id, post_id) DO NOTHING
+        """, (pattern_id, row['id']))
+        linked += 1
+    conn.commit()
+    # Recalculate all stats in bulk
+    recalculate_pattern_stats()
+    cur.close()
+    cur2.close()
+    conn.close()
+    return linked
+
+
+def recalculate_pattern_stats():
+    """Bulk recalculate example_count, avg_viral_score, avg_views for all patterns."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        UPDATE hook_patterns hp SET
+            example_count = COALESCE(sub.cnt, 0),
+            avg_viral_score = COALESCE(sub.avg_vs, 0),
+            avg_views = COALESCE(sub.avg_v, 0),
+            updated_at = NOW()
+        FROM (
+            SELECT hpp.pattern_id,
+                   COUNT(*) AS cnt,
+                   AVG(p.viral_score) AS avg_vs,
+                   AVG(p.views) AS avg_v
+            FROM hook_pattern_posts hpp
+            JOIN posts p ON hpp.post_id = p.id
+            GROUP BY hpp.pattern_id
+        ) sub
+        WHERE hp.id = sub.pattern_id
+    """)
+    conn.commit()
+    cur.close()
+    conn.close()
+
+
+def create_notification(user_id: int, notif_type: str, title: str,
+                        body: str = None, link: str = None):
+    """Insert a notification for a user."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO notifications (user_id, type, title, body, link)
+        VALUES (%s, %s, %s, %s, %s)
+    """, (user_id, notif_type, title, body, link))
+    conn.commit()
+    cur.close()
+    conn.close()
+
+
+def generate_viral_post_notifications(username: str, platform: str, threshold: float = 3.0):
+    """Check if a tracked account has new viral posts and notify tracking users."""
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+    # Find posts scraped in the last 5 hours with viral score above threshold
+    cur.execute("""
+        SELECT p.id, p.viral_score, p.views, pr.id AS profile_id
+        FROM posts p
+        JOIN profiles pr ON p.profile_id = pr.id
+        WHERE pr.username = %s AND pr.platform = %s
+          AND p.viral_score >= %s
+          AND p.scraped_at > NOW() - INTERVAL '5 hours'
+    """, (username, platform, threshold))
+    viral_posts = cur.fetchall()
+
+    if not viral_posts:
+        cur.close()
+        conn.close()
+        return 0
+
+    profile_id = viral_posts[0]['profile_id']
+
+    # Find users tracking this profile
+    cur.execute("""
+        SELECT user_id FROM user_tracked_profiles WHERE profile_id = %s
+    """, (profile_id,))
+    tracking_users = cur.fetchall()
+
+    if not tracking_users:
+        cur.close()
+        conn.close()
+        return 0
+
+    notif_count = 0
+    cur2 = conn.cursor()
+    for post in viral_posts:
+        score = post['viral_score']
+        views = post['views'] or 0
+        title = f"@{username} just posted a {score:.1f}x viral post!"
+        body = f"A new post with {views:,} views is performing {score:.1f}x above their average."
+        link = f"/dashboard/hook-lab"
+
+        for u in tracking_users:
+            # Avoid duplicate notifications for the same post
+            cur2.execute("""
+                INSERT INTO notifications (user_id, type, title, body, link)
+                SELECT %s, %s, %s, %s, %s
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM notifications
+                    WHERE user_id = %s AND type = 'viral_post'
+                      AND body LIKE %s
+                      AND created_at > NOW() - INTERVAL '24 hours'
+                )
+            """, (u['user_id'], 'viral_post', title, body, link,
+                  u['user_id'], f'%post with {views:,} views%'))
+            notif_count += cur2.rowcount
+
+    conn.commit()
+    cur.close()
+    cur2.close()
+    conn.close()
+    return notif_count
+
+
 # Initialize on import
 init_db()
 migrate_hook_columns()
+migrate_audio_columns()

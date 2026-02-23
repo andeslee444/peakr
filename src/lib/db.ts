@@ -112,6 +112,8 @@ async function initSchema() {
     ALTER TABLE posts ADD COLUMN IF NOT EXISTS keyframe_base64 TEXT;
     ALTER TABLE posts ADD COLUMN IF NOT EXISTS s3_thumbnail_url TEXT;
     ALTER TABLE creator_profiles ADD COLUMN IF NOT EXISTS content_topics TEXT;
+    ALTER TABLE posts ADD COLUMN IF NOT EXISTS audio_name TEXT;
+    ALTER TABLE posts ADD COLUMN IF NOT EXISTS audio_author TEXT;
   `);
   // Video URL cache for hover-to-play
   await pool.query(`
@@ -224,6 +226,76 @@ async function initSchema() {
       added_at TIMESTAMPTZ DEFAULT NOW(),
       UNIQUE(user_hook_id, post_id)
     );
+  `);
+  // Global hook patterns (system-wide grouping + analytics)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS hook_patterns (
+      id SERIAL PRIMARY KEY,
+      canonical_template TEXT UNIQUE NOT NULL,
+      display_name TEXT,
+      hook_type TEXT,
+      niche TEXT,
+      example_count INTEGER DEFAULT 0,
+      avg_viral_score REAL DEFAULT 0,
+      avg_views REAL DEFAULT 0,
+      first_seen_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS hook_pattern_posts (
+      id SERIAL PRIMARY KEY,
+      pattern_id INTEGER NOT NULL REFERENCES hook_patterns(id) ON DELETE CASCADE,
+      post_id INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+      linked_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(pattern_id, post_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS user_saved_patterns (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      pattern_id INTEGER NOT NULL REFERENCES hook_patterns(id) ON DELETE CASCADE,
+      notes TEXT,
+      saved_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(user_id, pattern_id)
+    );
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_hpp_pattern_id ON hook_pattern_posts(pattern_id);
+    CREATE INDEX IF NOT EXISTS idx_hpp_post_id ON hook_pattern_posts(post_id);
+    CREATE INDEX IF NOT EXISTS idx_usp_user_id ON user_saved_patterns(user_id);
+    CREATE INDEX IF NOT EXISTS idx_usp_pattern_id ON user_saved_patterns(pattern_id);
+  `);
+  // Hook collections
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS hook_collections (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(user_id, name)
+    );
+    CREATE TABLE IF NOT EXISTS hook_collection_patterns (
+      id SERIAL PRIMARY KEY,
+      collection_id INTEGER NOT NULL REFERENCES hook_collections(id) ON DELETE CASCADE,
+      pattern_id INTEGER NOT NULL REFERENCES hook_patterns(id) ON DELETE CASCADE,
+      added_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(collection_id, pattern_id)
+    );
+  `);
+  // Notifications
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS notifications (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      type TEXT NOT NULL,
+      title TEXT NOT NULL,
+      body TEXT,
+      link TEXT,
+      read_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_notifications_user_id ON notifications(user_id);
+    CREATE INDEX IF NOT EXISTS idx_notifications_created_at ON notifications(created_at DESC);
   `);
   // Deduplicate saved_posts and add unique constraint if missing
   await pool.query(`

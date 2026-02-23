@@ -164,9 +164,8 @@ export async function POST(request: NextRequest) {
         [post.id, folder],
       );
 
-      // Also create a user_hook entry if user is logged in
+      // Also save to hook_patterns + user_saved_patterns if user is logged in
       if (userId) {
-        // Check if post has hook_analysis with a template
         const { rows: [postData] } = await client.query(
           'SELECT hook_analysis FROM posts WHERE id = $1',
           [post.id]
@@ -174,40 +173,34 @@ export async function POST(request: NextRequest) {
         const analysis = postData?.hook_analysis;
         const rawTemplate = analysis?.hook_template ? String(analysis.hook_template) : null;
         const canonical = rawTemplate ? normalizeTemplate(rawTemplate) : null;
-        const hookType = analysis?.hook_type || null;
-        const niche = analysis?.niche || null;
-
-        let userHookId: number;
 
         if (canonical) {
-          const { rows: existingHook } = await client.query(
-            'SELECT id FROM user_hooks WHERE user_id = $1 AND canonical_template = $2',
-            [userId, canonical]
-          );
-          if (existingHook.length > 0) {
-            userHookId = existingHook[0].id;
-          } else {
-            const { rows: [newHook] } = await client.query(
-              `INSERT INTO user_hooks (user_id, canonical_template, display_name, hook_type, niche)
-               VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-              [userId, canonical, rawTemplate, hookType, niche]
-            );
-            userHookId = newHook.id;
-          }
-        } else {
-          const { rows: [newHook] } = await client.query(
-            `INSERT INTO user_hooks (user_id, canonical_template, display_name, hook_type, niche)
-             VALUES ($1, NULL, NULL, $2, $3) RETURNING id`,
-            [userId, hookType, niche]
-          );
-          userHookId = newHook.id;
-        }
+          const hookType = analysis?.hook_type || null;
+          const niche = analysis?.niche || null;
 
-        await client.query(
-          `INSERT INTO user_hook_examples (user_hook_id, post_id)
-           VALUES ($1, $2) ON CONFLICT DO NOTHING`,
-          [userHookId, post.id]
-        );
+          // Upsert global pattern
+          const { rows: [pattern] } = await client.query(
+            `INSERT INTO hook_patterns (canonical_template, display_name, hook_type, niche)
+             VALUES ($1, $2, $3, $4)
+             ON CONFLICT (canonical_template) DO UPDATE SET updated_at = NOW()
+             RETURNING id`,
+            [canonical, rawTemplate, hookType, niche]
+          );
+
+          // Link post to pattern
+          await client.query(
+            `INSERT INTO hook_pattern_posts (pattern_id, post_id)
+             VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+            [pattern.id, post.id]
+          );
+
+          // Save pattern for user
+          await client.query(
+            `INSERT INTO user_saved_patterns (user_id, pattern_id)
+             VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+            [userId, pattern.id]
+          );
+        }
       }
 
       await client.query('COMMIT');
