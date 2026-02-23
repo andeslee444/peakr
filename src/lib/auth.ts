@@ -15,24 +15,43 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         password: { label: 'Password', type: 'password' },
       },
       async authorize(credentials) {
-        if (!credentials?.email || !credentials?.password) return null;
+        try {
+          if (!credentials?.email || !credentials?.password) {
+            console.log('[auth] Missing email or password');
+            return null;
+          }
 
-        const pool = getPool();
-        const { rows: [user] } = await pool.query(
-          'SELECT id, email, password_hash, username, display_name FROM users WHERE email = $1',
-          [credentials.email]
-        );
+          const pool = getPool();
+          const { rows: [user] } = await pool.query(
+            'SELECT id, email, password_hash, username, display_name FROM users WHERE email = $1',
+            [credentials.email]
+          );
 
-        if (!user || !user.password_hash) return null;
+          if (!user) {
+            console.log('[auth] No user found for email:', credentials.email);
+            return null;
+          }
+          if (!user.password_hash) {
+            console.log('[auth] User has no password_hash (OAuth-only account):', credentials.email);
+            return null;
+          }
 
-        const valid = await bcrypt.compare(credentials.password as string, user.password_hash);
-        if (!valid) return null;
+          const valid = await bcrypt.compare(credentials.password as string, user.password_hash);
+          if (!valid) {
+            console.log('[auth] Password mismatch for:', credentials.email);
+            return null;
+          }
 
-        return {
-          id: String(user.id),
-          email: user.email,
-          name: user.display_name || user.username || user.email,
-        };
+          console.log('[auth] Login success for user:', user.id);
+          return {
+            id: String(user.id),
+            email: user.email,
+            name: user.display_name || user.username || user.email,
+          };
+        } catch (err) {
+          console.error('[auth] authorize error:', err);
+          return null;
+        }
       },
     }),
   ],
