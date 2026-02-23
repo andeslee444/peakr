@@ -27,6 +27,51 @@ export default function AccountPage() {
   const trackedCount = stats?.totalAccounts ?? 0;
   const trackLimit = 15;
 
+  // Change password state
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [pwLoading, setPwLoading] = useState(false);
+  const [pwError, setPwError] = useState('');
+  const [pwSuccess, setPwSuccess] = useState('');
+
+  const handleChangePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setPwError('');
+    setPwSuccess('');
+
+    if (newPassword.length < 8) {
+      setPwError('New password must be at least 8 characters');
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setPwError('Passwords do not match');
+      return;
+    }
+
+    setPwLoading(true);
+    try {
+      const res = await fetch('/api/auth/change-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ currentPassword, newPassword }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setPwError(data.error || 'Failed to change password');
+      } else {
+        setPwSuccess('Password changed successfully');
+        setCurrentPassword('');
+        setNewPassword('');
+        setConfirmPassword('');
+      }
+    } catch {
+      setPwError('Something went wrong');
+    } finally {
+      setPwLoading(false);
+    }
+  };
+
   return (
     <div className="max-w-2xl space-y-6">
       <div>
@@ -52,9 +97,68 @@ export default function AccountPage() {
           )}
           <div>
             <p className="font-medium text-gray-900">{name}</p>
-            <p className="text-sm text-gray-500 mt-1">Signed in via TikTok</p>
+            <p className="text-sm text-gray-500 mt-1">{session?.user?.email || 'Signed in via TikTok'}</p>
           </div>
         </div>
+      </div>
+
+      {/* Change Password section */}
+      <div className="bg-white rounded-2xl p-6 card-shadow">
+        <h2 className="text-lg font-semibold text-gray-900 mb-4">Change Password</h2>
+        <form onSubmit={handleChangePassword} className="space-y-4">
+          <div>
+            <label htmlFor="currentPassword" className="block text-sm font-medium text-gray-700">
+              Current Password
+            </label>
+            <input
+              id="currentPassword"
+              type="password"
+              value={currentPassword}
+              onChange={(e) => setCurrentPassword(e.target.value)}
+              className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm placeholder-gray-400 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 text-sm"
+              placeholder="Leave blank if setting for the first time"
+            />
+          </div>
+          <div>
+            <label htmlFor="newPassword" className="block text-sm font-medium text-gray-700">
+              New Password
+            </label>
+            <input
+              id="newPassword"
+              type="password"
+              required
+              minLength={8}
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm placeholder-gray-400 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 text-sm"
+              placeholder="At least 8 characters"
+            />
+          </div>
+          <div>
+            <label htmlFor="confirmPassword" className="block text-sm font-medium text-gray-700">
+              Confirm New Password
+            </label>
+            <input
+              id="confirmPassword"
+              type="password"
+              required
+              minLength={8}
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm placeholder-gray-400 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 text-sm"
+              placeholder="Re-enter new password"
+            />
+          </div>
+          {pwError && <p className="text-sm text-red-600">{pwError}</p>}
+          {pwSuccess && <p className="text-sm text-green-600">{pwSuccess}</p>}
+          <button
+            type="submit"
+            disabled={pwLoading}
+            className="px-5 py-2.5 bg-indigo-600 text-white rounded-xl text-sm font-medium hover:bg-indigo-700 transition-colors disabled:opacity-50"
+          >
+            {pwLoading ? 'Updating...' : 'Update Password'}
+          </button>
+        </form>
       </div>
 
       {/* Subscription section */}
