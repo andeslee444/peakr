@@ -24,12 +24,42 @@ removed; email normalization; password policy; rate limiting (login/signup/AI/
 scrape); fresh-DB bootstrap ordering fixed; BIGINT engagement counters;
 saved_posts scoped per-user with auth on all saved routes; session maxAge.
 
-**Gate status:** 42 Vitest tests + 23 pytest tests pass; `tsc --noEmit` clean;
-`npm run build` succeeds.
+**✅ Wave 3 (integrations) — DONE.** Password reset (Resend, gated) + login link;
+Sentry (Next instrumentation + Python daemon, gated on DSN); Stripe checkout +
+webhook + plan gating + wired Upgrade button.
 
-**⏳ Remaining:** Wave 3 (Stripe / Sentry / password-reset integrations),
-Wave 4 (scraper reliability), Wave 5 (AI robustness), Wave 6 (frontend/UX),
-Wave 7 (infra-prep, lint drift, Terms/Privacy, README, indexes, account deletion).
+**✅ Wave 4 (scraper reliability) — mostly DONE.** Stuck-queue reclaim; daemon
+crash-guards on the unguarded DB calls; launchd supervisor plist; heartbeat +
+/api/worker-status; IG session-expiry now alerts via Sentry; notification dedup
+fixed; requirements.txt completed.
+
+**✅ Wave 5 (AI robustness) — DONE.** LLM output validation (regenerate); 30s
+fetch timeouts + maxDuration on all DeepSeek routes; prompt-injection containment
+in hooks.py. (Models already use stable aliases.)
+
+**✅ Wave 6 (frontend/UX) — mostly DONE.** Avatar-initial bug; signup intent;
+login loading-hang; destructive-action confirms; stalled-pipeline banner; removed
+infra leak.
+
+**✅ Wave 7 (infra/ops/docs) — DONE.** Terraform hardening + runbook; lint drift
+fixed (lint passes); Terms/Privacy pages; account deletion (GDPR); README rewrite;
+hot-query indexes; pool sizing; track-avatar validation.
+
+**Gate status:** 77 Vitest + 31 pytest pass; `tsc --noEmit` clean; `npm run lint`
+0 errors; `npm run build` succeeds (53 routes).
+
+**Deferred (need live/operator involvement or low ROI vs risk):**
+- **4.4 IG proxy enforcement** — routing IG headless Chromium + yt-dlp through a
+  proxy needs the proxy config + live IG testing; changing fragile scraper
+  internals blind risks breaking the working scraper. Operator task.
+- **6.2 broad error-vs-empty states** — several dashboard fetch handlers still show
+  empty states on error; the highest-impact lies (stalled pipeline) are now
+  surfaced via the banner. Remaining is per-page polish.
+- **7.10 search-accounts silent external-lookup failure** — surfacing requires
+  refactoring the error-swallowing external-lookup helpers; search still degrades
+  to local results today.
+- **4.6 retry/backoff for persistently-failing profiles + seed-batch yields** —
+  analysis retries are now capped (Wave 1.3); profile-scrape backoff remains.
 
 ---
 
