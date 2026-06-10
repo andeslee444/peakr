@@ -8,6 +8,8 @@ import psycopg2.extras
 from datetime import datetime
 from typing import Optional
 
+from scraper.analysis_state import MAX_ANALYSIS_ATTEMPTS, failure_marker
+
 DATABASE_URL = os.environ.get('DATABASE_URL', '')
 
 SCHEMA = """
@@ -453,10 +455,12 @@ def get_unanalyzed_viral_posts(threshold: float = 1.5, limit: int = 10) -> list[
          FROM posts p JOIN profiles pr ON p.profile_id = pr.id
          WHERE p.viral_score >= %s AND p.analyzed_at IS NULL
                AND (p.hook_analysis IS NULL OR p.hook_analysis != '{"status": "pending"}')
+               AND (p.hook_analysis->>'status' IS DISTINCT FROM 'failed'
+                    OR COALESCE((p.hook_analysis->>'attempts')::int, 0) < %s)
          ORDER BY p.viral_score DESC LIMIT %s)
         ORDER BY priority, viral_score DESC
         LIMIT %s
-    """, (limit, threshold, limit, limit))
+    """, (limit, threshold, MAX_ANALYSIS_ATTEMPTS, limit, limit))
     rows = cur.fetchall()
     cur.close()
     conn.close()
@@ -519,6 +523,24 @@ def save_hook_analysis(post_id: int, transcript: str, hook_analysis_dict: dict,
                 WHERE hook_patterns.id = %s
             """, (pattern_id, pattern_id))
 
+    conn.commit()
+    cur.close()
+    conn.close()
+
+
+def mark_analysis_failed(post_id: int, attempts: int, reason: str = ""):
+    """Record a failed analysis attempt so the post is not retried forever.
+
+    Writes a ``{"status":"failed","attempts":N,...}`` marker. Once attempts reach
+    MAX_ANALYSIS_ATTEMPTS, get_unanalyzed_viral_posts stops selecting the post,
+    which prevents a single bad post from starving the daemon loop.
+    """
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE posts SET hook_analysis = %s WHERE id = %s",
+        (json.dumps(failure_marker(attempts, reason)), post_id),
+    )
     conn.commit()
     cur.close()
     conn.close()
@@ -887,7 +909,10 @@ def generate_viral_post_notifications(username: str, platform: str, threshold: f
     return notif_count
 
 
-# Initialize on import
-init_db()
-migrate_hook_columns()
-migrate_audio_columns()
+# Initialize on import (only when a database is configured). Skipping when
+# DATABASE_URL is unset keeps the module importable in tests/CI without a DB and
+# avoids an import-time connection failure.
+if DATABASE_URL:
+    init_db()
+    migrate_hook_columns()
+    migrate_audio_columns()

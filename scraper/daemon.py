@@ -211,9 +211,12 @@ def run_daemon():
                     log.info(f"[ANALYZE] Fast-path: post {post['id']} by @{post.get('username', '?')} (viral: {post.get('viral_score', 0):.1f}x)")
                     if analyze_post(post):
                         log.info(f"[ANALYZE] Done: post {post['id']}")
-                    else:
-                        log.warning(f"[ANALYZE] Failed: post {post['id']}")
-                    continue  # Check for more pending immediately
+                        continue  # Success — check for more pending immediately
+                    # Failure is recorded by analyze_post (failure marker), so the
+                    # same post will not be re-selected. Fall through to the normal
+                    # sleep instead of tight-looping (the old `continue` here caused
+                    # a zero-delay livelock when a post failed deterministically).
+                    log.warning(f"[ANALYZE] Failed: post {post['id']} (recorded; not retrying immediately)")
             except Exception as e:
                 log.error(f"[ANALYZE] Fast-path error: {e}")
 
