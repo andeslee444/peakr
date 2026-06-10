@@ -64,6 +64,28 @@ export default function DashboardLayout({
   const [unreadCount, setUnreadCount] = useState(0);
   const [showNotifications, setShowNotifications] = useState(false);
   const notifRef = useRef<HTMLDivElement>(null);
+  const [upgrading, setUpgrading] = useState(false);
+
+  const handleUpgrade = useCallback(async () => {
+    setUpgrading(true);
+    try {
+      const res = await fetch('/api/billing/checkout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ plan: 'monthly' }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.url) {
+        window.location.href = data.url;
+        return;
+      }
+      alert(data.error || 'Billing is not available yet. Please try again later.');
+    } catch {
+      alert('Something went wrong starting checkout.');
+    } finally {
+      setUpgrading(false);
+    }
+  }, []);
 
   const fetchNotifications = useCallback(async () => {
     try {
@@ -171,8 +193,12 @@ export default function DashboardLayout({
             <p className="text-sm text-indigo-100 mt-1">
               Track 50 accounts & more
             </p>
-            <button className="mt-3 w-full bg-white text-indigo-600 font-semibold py-2 rounded-lg hover:bg-indigo-50 transition-colors">
-              Upgrade
+            <button
+              onClick={handleUpgrade}
+              disabled={upgrading}
+              className="mt-3 w-full bg-white text-indigo-600 font-semibold py-2 rounded-lg hover:bg-indigo-50 transition-colors disabled:opacity-60"
+            >
+              {upgrading ? 'Starting…' : 'Upgrade'}
             </button>
           </div>
         </div>

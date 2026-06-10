@@ -287,6 +287,11 @@ async function initSchema() {
       UNIQUE(collection_id, pattern_id)
     );
   `);
+  // Billing: subscription plan + Stripe customer linkage on users
+  await pool.query(`
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS plan TEXT NOT NULL DEFAULT 'free';
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS stripe_customer_id TEXT;
+  `);
   // Password reset tokens (only the SHA-256 hash is stored)
   await pool.query(`
     CREATE TABLE IF NOT EXISTS password_reset_tokens (
