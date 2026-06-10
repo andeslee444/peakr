@@ -138,6 +138,15 @@ def scrape_profile(username: str, headless: bool = True) -> Optional[Dict]:
             # Check session validity
             if not _has_valid_session(ctx):
                 log.error("No valid Instagram session. Run with --login first.")
+                # Alert the operator — this is otherwise a silent, permanent
+                # failure (every IG scrape fails until someone re-logs in).
+                try:
+                    from scraper.observability import capture_exception
+                    capture_exception(RuntimeError(
+                        "Instagram session expired — run `python3 -m scraper.instagram --login` on the Mac Mini"
+                    ))
+                except Exception:
+                    pass
                 return None
 
             # Use the web_profile_info API
