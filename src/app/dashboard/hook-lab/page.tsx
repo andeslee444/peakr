@@ -14,6 +14,7 @@ export default function HookLabPage() {
   const [posts, setPosts] = useState<Post[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [offset, setOffset] = useState(0);
   const [filters, setFilters] = useState<HookFilterState>(DEFAULT_FILTERS);
@@ -84,7 +85,7 @@ export default function HookLabPage() {
   }, []);
 
   const fetchPosts = useCallback(async (currentOffset: number, append: boolean) => {
-    if (append) setLoadingMore(true); else setLoading(true);
+    if (append) setLoadingMore(true); else { setLoading(true); setLoadError(false); }
 
     try {
       const params = new URLSearchParams();
@@ -101,6 +102,7 @@ export default function HookLabPage() {
       if (filters.search) params.set('search', filters.search);
 
       const res = await fetch(`/api/hook-lab?${params}`);
+      if (!res.ok) throw new Error(`hook-lab ${res.status}`);
       const data = await res.json();
       const fetchedPosts = data.posts || [];
 
@@ -117,7 +119,7 @@ export default function HookLabPage() {
       }
       setTotal(data.total || 0);
     } catch {
-      if (!append) setPosts([]);
+      if (!append) { setPosts([]); setLoadError(true); }
     } finally {
       setLoading(false);
       setLoadingMore(false);
@@ -314,6 +316,18 @@ export default function HookLabPage() {
         <div className="text-center py-16">
           <div className="animate-spin inline-block w-8 h-8 border-4 border-indigo-500 border-t-transparent rounded-full" />
           <p className="mt-4 text-gray-500">Loading hooks...</p>
+        </div>
+      ) : loadError ? (
+        <div className="text-center py-16">
+          <span className="text-6xl">⚠️</span>
+          <h3 className="mt-4 text-lg font-semibold text-gray-900">Couldn&apos;t load hooks</h3>
+          <p className="mt-2 text-gray-600">Something went wrong fetching hooks. This is on us, not you.</p>
+          <button
+            onClick={() => fetchPosts(0, false)}
+            className="mt-4 px-5 py-2.5 bg-indigo-600 text-white rounded-xl text-sm font-medium hover:bg-indigo-700 transition-colors"
+          >
+            Try again
+          </button>
         </div>
       ) : posts.length === 0 ? (
         <div className="text-center py-16">
