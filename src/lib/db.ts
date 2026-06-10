@@ -107,6 +107,12 @@ async function initSchema() {
       started_at TIMESTAMPTZ,
       completed_at TIMESTAMPTZ
     );
+
+    CREATE TABLE IF NOT EXISTS worker_heartbeats (
+      worker_id TEXT PRIMARY KEY,
+      last_heartbeat_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      status TEXT
+    );
   `);
   // Migrate hook columns for existing databases
   await pool.query(`

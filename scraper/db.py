@@ -94,6 +94,12 @@ CREATE TABLE IF NOT EXISTS scrape_queue (
   completed_at TIMESTAMPTZ
 );
 
+CREATE TABLE IF NOT EXISTS worker_heartbeats (
+  worker_id TEXT PRIMARY KEY,
+  last_heartbeat_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  status TEXT
+);
+
 CREATE TABLE IF NOT EXISTS seed_creators (
   id SERIAL PRIMARY KEY,
   username TEXT NOT NULL,
@@ -599,6 +605,38 @@ def pop_scrape_queue() -> Optional[tuple]:
     if not profile:
         return None
     return (queue_id, profile['username'], profile['platform'])
+
+
+def reclaim_stale_queue_entries(max_age_minutes: int = 15) -> int:
+    """Reset queue rows stuck 'in_progress' (daemon crashed mid-scrape) back to
+    'pending' so the profile can be scraped again. Returns rows reclaimed."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        """UPDATE scrape_queue SET status='pending', started_at=NULL
+           WHERE status='in_progress' AND started_at < NOW() - make_interval(mins => %s)""",
+        (max_age_minutes,),
+    )
+    n = cur.rowcount
+    conn.commit()
+    cur.close()
+    conn.close()
+    return n
+
+
+def record_heartbeat(worker_id: str, status: str = 'ok') -> None:
+    """Upsert the daemon's liveness heartbeat (read by /api/worker-status)."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        """INSERT INTO worker_heartbeats (worker_id, last_heartbeat_at, status)
+           VALUES (%s, NOW(), %s)
+           ON CONFLICT (worker_id) DO UPDATE SET last_heartbeat_at = NOW(), status = EXCLUDED.status""",
+        (worker_id, status),
+    )
+    conn.commit()
+    cur.close()
+    conn.close()
 
 
 def complete_scrape_queue(queue_id: int, status: str = 'done'):

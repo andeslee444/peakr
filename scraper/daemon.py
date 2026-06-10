@@ -29,9 +29,11 @@ from scraper.db import (
     get_active_seed_creators, get_top_seed_creators, add_profile,
     compute_daily_top_hooks, update_profile_niches, clean_expired_video_cache,
     queue_top_posts_for_analysis, backfill_hook_patterns, recalculate_pattern_stats,
-    generate_viral_post_notifications,
+    generate_viral_post_notifications, reclaim_stale_queue_entries, record_heartbeat,
 )
 from scraper.observability import init_sentry, capture_exception
+
+WORKER_ID = os.environ.get("WORKER_ID", "mac-mini")
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("peakr-daemon")
@@ -161,6 +163,15 @@ def run_daemon():
 
     init_sentry()
 
+    # Reclaim any queue rows left 'in_progress' by a previous crash.
+    try:
+        reclaimed = reclaim_stale_queue_entries()
+        if reclaimed:
+            log.info(f"[STARTUP] Reclaimed {reclaimed} stale queue entries")
+    except Exception as e:
+        log.error(f"[STARTUP] Queue reclaim error: {e}")
+        capture_exception(e)
+
     # Backfill hook patterns on startup (idempotent)
     try:
         linked = backfill_hook_patterns()
@@ -276,6 +287,13 @@ def run_daemon():
 
             # --- Slow path: refresh stale user-tracked profiles (every 60s) ---
             if time.time() - last_refresh > 60:
+                # Liveness heartbeat + periodic stuck-queue recovery.
+                try:
+                    record_heartbeat(WORKER_ID)
+                    reclaim_stale_queue_entries()
+                except Exception as e:
+                    log.error(f"Heartbeat/reclaim error: {e}")
+                    capture_exception(e)
                 try:
                     all_profiles = get_active_profiles()
                 except Exception as e:
