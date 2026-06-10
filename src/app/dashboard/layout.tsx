@@ -65,6 +65,20 @@ export default function DashboardLayout({
   const [showNotifications, setShowNotifications] = useState(false);
   const notifRef = useRef<HTMLDivElement>(null);
   const [upgrading, setUpgrading] = useState(false);
+  const [workerAlive, setWorkerAlive] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const check = () => {
+      fetch('/api/worker-status')
+        .then((r) => r.json())
+        .then((d) => { if (!cancelled) setWorkerAlive(d.alive !== false); })
+        .catch(() => { /* leave unknown */ });
+    };
+    check();
+    const id = setInterval(check, 60_000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, []);
 
   const handleUpgrade = useCallback(async () => {
     setUpgrading(true);
@@ -304,6 +318,11 @@ export default function DashboardLayout({
 
         {/* Page content */}
         <main className="p-4 sm:p-6 pb-24 lg:pb-6">
+          {workerAlive === false && (
+            <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              Content updates are delayed right now — our scraper is catching up. Your data may not be the latest.
+            </div>
+          )}
           {children}
         </main>
       </div>

@@ -961,21 +961,20 @@ def generate_viral_post_notifications(username: str, platform: str, threshold: f
         views = post['views'] or 0
         title = f"@{username} just posted a {score:.1f}x viral post!"
         body = f"A new post with {views:,} views is performing {score:.1f}x above their average."
-        link = f"/dashboard/hook-lab"
+        # The link carries the stable post id so dedup keys on the POST, not on the
+        # ever-changing view count (which previously re-fired on every re-scrape).
+        link = f"/dashboard/hook-lab?post={post['id']}"
 
         for u in tracking_users:
-            # Avoid duplicate notifications for the same post
             cur2.execute("""
                 INSERT INTO notifications (user_id, type, title, body, link)
                 SELECT %s, %s, %s, %s, %s
                 WHERE NOT EXISTS (
                     SELECT 1 FROM notifications
-                    WHERE user_id = %s AND type = 'viral_post'
-                      AND body LIKE %s
-                      AND created_at > NOW() - INTERVAL '24 hours'
+                    WHERE user_id = %s AND type = 'viral_post' AND link = %s
                 )
             """, (u['user_id'], 'viral_post', title, body, link,
-                  u['user_id'], f'%post with {views:,} views%'))
+                  u['user_id'], link))
             notif_count += cur2.rowcount
 
     conn.commit()
