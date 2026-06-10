@@ -32,7 +32,8 @@ async function lookupInstagramUser(query: string): Promise<SearchResult[]> {
       }
     );
 
-    if (!resp.ok) return [];
+    if (resp.status === 404) return [];
+    if (!resp.ok) throw new Error(`instagram lookup failed: ${resp.status}`);
 
     const json = await resp.json();
     const user = json?.data?.user;
@@ -49,8 +50,9 @@ async function lookupInstagramUser(query: string): Promise<SearchResult[]> {
         is_tracked: false,
       },
     ];
-  } catch {
-    return [];
+  } catch (e) {
+    if (e instanceof SyntaxError) return []; // unparseable body → treat as no result
+    throw e; // network/timeout/HTTP error → signal lookup failure to the caller
   }
 }
 
@@ -67,7 +69,8 @@ async function lookupTikTokUser(query: string): Promise<SearchResult[]> {
       signal: AbortSignal.timeout(8000),
     });
 
-    if (!resp.ok) return [];
+    if (resp.status === 404) return [];
+    if (!resp.ok) throw new Error(`tiktok lookup failed: ${resp.status}`);
 
     const html = await resp.text();
     const match = html.match(
@@ -95,8 +98,9 @@ async function lookupTikTokUser(query: string): Promise<SearchResult[]> {
         is_tracked: false,
       },
     ];
-  } catch {
-    return [];
+  } catch (e) {
+    if (e instanceof SyntaxError) return []; // unparseable body → treat as no result
+    throw e; // network/timeout/HTTP error → signal lookup failure to the caller
   }
 }
 
@@ -121,9 +125,14 @@ export async function GET(req: NextRequest) {
     const session = await auth().catch(() => null);
     const userId = session?.user?.id ? Number(session.user.id) : null;
 
-    // Run external lookup and local DB query in parallel
+    // Run external lookup and local DB query in parallel. The external lookup
+    // can fail (e.g. platform blocks our datacenter IP) — capture that so the UI
+    // can tell the user results may be incomplete rather than failing silently.
+    let externalOk = true;
+    const externalLookup = (platform === 'tiktok' ? lookupTikTokUser(q) : lookupInstagramUser(q))
+      .catch(() => { externalOk = false; return [] as SearchResult[]; });
     const [externalResults, localResults] = await Promise.all([
-      platform === 'tiktok' ? lookupTikTokUser(q) : lookupInstagramUser(q),
+      externalLookup,
       getPool()
         .query(
           `SELECT username, display_name, avatar_url, followers, post_count
@@ -177,7 +186,7 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    return NextResponse.json({ results: merged.slice(0, 10) });
+    return NextResponse.json({ results: merged.slice(0, 10), externalOk });
   } catch (err) {
     console.error('Search accounts error:', err);
     return NextResponse.json({ error: 'Search failed' }, { status: 500 });

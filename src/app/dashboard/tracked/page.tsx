@@ -25,6 +25,7 @@ export default function TrackedPage() {
   const [searchResults, setSearchResults] = useState<{ username: string; display_name: string; avatar_url: string; followers: number; post_count: number; verified: boolean; is_tracked: boolean }[]>([]);
   const [showDropdown, setShowDropdown] = useState(false);
   const [searchLoading, setSearchLoading] = useState(false);
+  const [searchExternalOk, setSearchExternalOk] = useState(true);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -65,8 +66,12 @@ export default function TrackedPage() {
         const res = await fetch(`/api/search-accounts?q=${encodeURIComponent(query.replace(/^@/, '').trim())}&platform=${platform}`);
         const data = await res.json();
         const results = data.results || [];
+        const extOk = data.externalOk !== false;
         setSearchResults(results);
-        if (results.length === 0) setShowDropdown(false);
+        setSearchExternalOk(extOk);
+        // Keep the dropdown open to show the "couldn't reach platform" notice
+        // when the live lookup failed and we have nothing local to show.
+        if (results.length === 0 && extOk) setShowDropdown(false);
       } catch {
         setSearchResults([]);
         setShowDropdown(false);
@@ -191,6 +196,11 @@ export default function TrackedPage() {
                   <div className="flex items-center justify-center py-4 text-gray-400 text-sm">
                     <span className="animate-spin inline-block w-4 h-4 border-2 border-indigo-400 border-t-transparent rounded-full mr-2" />
                     Searching...
+                  </div>
+                ) : searchResults.length === 0 && !searchExternalOk ? (
+                  <div className="px-4 py-3 text-sm text-amber-700">
+                    Couldn&apos;t reach {trackPlatform} to look up that handle right now. You can still
+                    type the exact username and track it directly.
                   </div>
                 ) : (
                   searchResults.map((result) => (
