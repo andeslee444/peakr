@@ -282,6 +282,17 @@ async function initSchema() {
       UNIQUE(collection_id, pattern_id)
     );
   `);
+  // Per-user manual analysis request log (daily-cap enforcement)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS analysis_requests (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      post_id INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_analysis_requests_user_created
+      ON analysis_requests(user_id, created_at DESC);
+  `);
   // Notifications
   await pool.query(`
     CREATE TABLE IF NOT EXISTS notifications (
