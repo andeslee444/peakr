@@ -137,7 +137,10 @@ export default function DashboardLayout({
     return `${days}d ago`;
   };
 
-  const userInitial = session?.user?.name?.charAt(0)?.toUpperCase() || session?.user?.image ? null : '?';
+  // Shown only when there's no avatar image (see render below): the first letter
+  // of the name, or '?' as a fallback. (Was a precedence bug: `a || b ? null : '?'`
+  // parsed as `(a || b) ? null : '?'`, so it never showed the initial.)
+  const userInitial = session?.user?.name?.charAt(0)?.toUpperCase() || '?';
 
   return (
     <div className="min-h-screen bg-gray-50">

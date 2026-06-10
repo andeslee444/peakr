@@ -1,12 +1,19 @@
 'use client';
 
 import Link from 'next/link';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { signIn } from 'next-auth/react';
 
 export default function LoginPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [isSignup, setIsSignup] = useState(false);
+
+  // /signup redirects here with ?signup=true — honor that intent.
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get('signup') === 'true') {
+      setIsSignup(true);
+    }
+  }, []);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');

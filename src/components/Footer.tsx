@@ -52,10 +52,10 @@ export default function Footer() {
             <h3 className="font-semibold mb-4">Legal</h3>
             <ul className="space-y-2">
               <li>
-                <span className="text-gray-400">Privacy</span>
+                <Link href="/privacy" className="text-gray-400 hover:text-white transition-colors">Privacy</Link>
               </li>
               <li>
-                <span className="text-gray-400">Terms</span>
+                <Link href="/terms" className="text-gray-400 hover:text-white transition-colors">Terms</Link>
               </li>
             </ul>
           </div>
