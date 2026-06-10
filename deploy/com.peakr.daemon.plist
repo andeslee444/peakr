@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  launchd supervisor for the Peakr scraper daemon (Mac Mini).
+  KeepAlive restarts the daemon if it crashes or exits; RunAtLoad starts it at
+  login/boot. This is the "supervisor" the audit flagged as missing.
+
+  Install (edit paths + env first):
+    cp deploy/com.peakr.daemon.plist ~/Library/LaunchAgents/
+    launchctl load -w ~/Library/LaunchAgents/com.peakr.daemon.plist
+  Tail logs:    tail -f /tmp/peakr-daemon.log /tmp/peakr-daemon.err
+  Restart:      launchctl kickstart -k gui/$(id -u)/com.peakr.daemon
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.peakr.daemon</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>-m</string>
+        <string>scraper.daemon</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/andeslee/Documents/Cursor-Projects/peakr</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>DATABASE_URL</key>
+        <string>REPLACE_WITH_DATABASE_URL</string>
+        <!-- Optional: <key>SENTRY_DSN</key><string>...</string> -->
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Restart on crash, but throttle to avoid hot-looping a broken process. -->
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/peakr-daemon.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/peakr-daemon.err</string>
+</dict>
+</plist>

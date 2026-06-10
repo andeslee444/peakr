@@ -31,6 +31,7 @@ from scraper.db import (
     queue_top_posts_for_analysis, backfill_hook_patterns, recalculate_pattern_stats,
     generate_viral_post_notifications,
 )
+from scraper.observability import init_sentry, capture_exception
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("peakr-daemon")
@@ -158,6 +159,8 @@ def run_daemon():
     PID_FILE.write_text(str(os.getpid()))
     log.info(f"Daemon started (PID {os.getpid()})")
 
+    init_sentry()
+
     # Backfill hook patterns on startup (idempotent)
     try:
         linked = backfill_hook_patterns()
@@ -182,7 +185,14 @@ def run_daemon():
             weekday = est_now.weekday()  # 0=Monday, 6=Sunday
 
             # --- Fast path: on-demand scrape queue (checked every loop) ---
-            queued = pop_scrape_queue()
+            try:
+                queued = pop_scrape_queue()
+            except Exception as e:
+                # A transient DB error here used to crash the whole daemon.
+                log.error(f"[QUEUE] Failed to read scrape queue: {e}")
+                capture_exception(e)
+                time.sleep(5)
+                continue
             if queued:
                 queue_id, username, platform = queued
                 log.info(f"[QUEUE] Scraping {platform}/@{username} (queue #{queue_id})")
@@ -219,6 +229,7 @@ def run_daemon():
                     log.warning(f"[ANALYZE] Failed: post {post['id']} (recorded; not retrying immediately)")
             except Exception as e:
                 log.error(f"[ANALYZE] Fast-path error: {e}")
+                capture_exception(e)
 
             # --- Scheduled: Daily top-50 seed scrape at midnight EST ---
             if hour == 0 and last_daily_top50 != today:
@@ -265,7 +276,12 @@ def run_daemon():
 
             # --- Slow path: refresh stale user-tracked profiles (every 60s) ---
             if time.time() - last_refresh > 60:
-                all_profiles = get_active_profiles()
+                try:
+                    all_profiles = get_active_profiles()
+                except Exception as e:
+                    log.error(f"Failed to fetch active profiles: {e}")
+                    capture_exception(e)
+                    all_profiles = []
                 if all_profiles:
                     cutoff = datetime.utcnow() - timedelta(seconds=REFRESH_INTERVAL)
 

@@ -1,2 +1,13 @@
-camoufox[geoip]
-curl_cffi
+# Peakr scraper daemon dependencies (run on the Mac Mini).
+# Install: pip3 install --break-system-packages -r requirements.txt
+# yt-dlp is also required for TikTok video resolution (brew install yt-dlp, or pip).
+
+camoufox[geoip]      # Playwright-based stealth browser (Instagram)
+curl_cffi            # Browser-impersonation HTTP client (TikTok metadata)
+playwright           # Browser automation (used directly + via camoufox)
+psycopg2-binary      # PostgreSQL driver
+boto3                # AWS S3 (thumbnail backfill)
+httpx                # HTTP client (hook analysis / OpenClaw gateway)
+
+# Optional — error monitoring. Active only when SENTRY_DSN is set.
+sentry-sdk
