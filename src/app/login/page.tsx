@@ -22,36 +22,41 @@ export default function LoginPage() {
     setError('');
     setIsLoading(true);
 
-    if (isSignup) {
-      // Sign up first, then sign in
-      const res = await fetch('/api/auth/signup', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password, name }),
+    try {
+      if (isSignup) {
+        // Sign up first, then sign in
+        const res = await fetch('/api/auth/signup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, password, name }),
+        });
+
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          setError(data.error || 'Signup failed');
+          return;
+        }
+      }
+
+      // Sign in with credentials
+      const result = await signIn('credentials', {
+        email,
+        password,
+        redirect: false,
       });
 
-      if (!res.ok) {
-        const data = await res.json();
-        setError(data.error || 'Signup failed');
-        setIsLoading(false);
+      if (result?.error) {
+        setError(isSignup ? 'Account created but login failed. Try signing in.' : 'Invalid email or password');
         return;
       }
-    }
 
-    // Sign in with credentials
-    const result = await signIn('credentials', {
-      email,
-      password,
-      redirect: false,
-    });
-
-    if (result?.error) {
-      setError(isSignup ? 'Account created but login failed. Try signing in.' : 'Invalid email or password');
+      window.location.href = '/dashboard';
+    } catch {
+      setError('Something went wrong. Please check your connection and try again.');
+    } finally {
+      // Always reset, so the button never hangs on "Loading..." after a failure.
       setIsLoading(false);
-      return;
     }
-
-    window.location.href = '/dashboard';
   };
 
   return (
@@ -124,6 +129,14 @@ export default function LoginPage() {
               />
             </div>
 
+            {!isSignup && (
+              <div className="text-right">
+                <Link href="/forgot-password" className="text-sm font-medium text-indigo-600 hover:text-indigo-500">
+                  Forgot password?
+                </Link>
+              </div>
+            )}
+
             {error && (
               <p className="text-sm text-red-600">{error}</p>
             )}
@@ -176,7 +189,9 @@ export default function LoginPage() {
           </p>
 
           <p className="mt-4 text-center text-xs text-gray-500">
-            By continuing, you agree to our Terms of Service and Privacy Policy.
+            By continuing, you agree to our{' '}
+            <Link href="/terms" className="underline hover:text-gray-700">Terms of Service</Link> and{' '}
+            <Link href="/privacy" className="underline hover:text-gray-700">Privacy Policy</Link>.
           </p>
         </div>
       </div>
