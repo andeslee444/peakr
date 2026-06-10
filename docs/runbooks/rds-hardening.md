@@ -1,5 +1,18 @@
 # RDS Hardening Runbook
 
+> ⚠️ **SUPERSEDED (2026-06-10): peakr no longer uses RDS.** The `peakr-db` RDS
+> instance was deleted (final snapshot `final-peakr-db…`, Apr 30 2026; confirmed
+> via NXDOMAIN on its endpoint). peakr now runs on **Neon Postgres**, provisioned
+> through the Vercel↔Neon integration: TLS-only, no public 5432 port, credentials
+> managed by the integration and rotated in the Neon console. The RDS-specific
+> hardening below (public-access lockdown, master-password rotation, Terraform
+> ingress) **no longer applies** — it's kept for history and in case RDS is ever
+> reintroduced. App-side TLS is handled by `buildSslConfig` (verifies the cert for
+> any remote host, including Neon). To rotate Neon credentials: Neon console →
+> project → Roles → reset password (Vercel auto-updates the managed env vars).
+
+---
+
 > Prepared by the launch-hardening pass. These steps touch **live production
 > infrastructure** and your AWS credentials, so they are documented here for you
 > to apply rather than applied automatically. Do them in a maintenance window.
