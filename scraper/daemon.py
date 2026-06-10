@@ -78,11 +78,42 @@ def scrape_one(username, platform):
     return False
 
 
+def drain_scrape_queue(max_items: int = 5) -> int:
+    """Process pending on-demand scrape-queue items so user-triggered tracks
+    aren't blocked behind multi-hour seed batches. Returns count processed."""
+    processed = 0
+    while processed < max_items and running:
+        try:
+            queued = pop_scrape_queue()
+        except Exception as e:
+            log.error(f"[QUEUE] drain read error: {e}")
+            capture_exception(e)
+            break
+        if not queued:
+            break
+        queue_id, username, platform = queued
+        log.info(f"[QUEUE] (priority during seed batch) {platform}/@{username} (queue #{queue_id})")
+        try:
+            ok = scrape_one(username, platform)
+            complete_scrape_queue(queue_id, 'done' if ok else 'error')
+            if ok:
+                queue_top_posts_for_analysis(username, platform, limit=5)
+        except Exception as e:
+            complete_scrape_queue(queue_id, 'error')
+            log.error(f"[QUEUE] Error scraping {platform}/@{username}: {e}")
+        processed += 1
+    return processed
+
+
 def scrape_seed_list(creators: list, tag: str = "SEED"):
     """Scrape a list of seed creators, ensuring each has a profile row."""
     for i, c in enumerate(creators):
         if not running:
             break
+
+        # Yield to any user-triggered tracks before continuing the seed batch.
+        drain_scrape_queue()
+
         username = c["username"]
         platform = c["platform"]
 
