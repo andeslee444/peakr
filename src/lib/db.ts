@@ -364,5 +364,11 @@ async function initSchema() {
     ALTER TABLE profiles ALTER COLUMN following   TYPE BIGINT;
     ALTER TABLE profiles ALTER COLUMN total_likes TYPE BIGINT;
   `);
+  // Indexes for hot list/sort paths (explore, export, hook-lab, profile views).
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_posts_profile_id ON posts(profile_id);
+    CREATE INDEX IF NOT EXISTS idx_posts_viral_score ON posts(viral_score DESC);
+    CREATE INDEX IF NOT EXISTS idx_posts_posted_at ON posts(posted_at DESC);
+  `);
   _schemaInitialized = true;
 }

@@ -439,6 +439,20 @@ def migrate_bignum_columns():
     conn.close()
 
 
+def migrate_indexes():
+    """Indexes for hot list/sort paths (idempotent)."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_posts_profile_id ON posts(profile_id);
+        CREATE INDEX IF NOT EXISTS idx_posts_viral_score ON posts(viral_score DESC);
+        CREATE INDEX IF NOT EXISTS idx_posts_posted_at ON posts(posted_at DESC);
+    """)
+    conn.commit()
+    cur.close()
+    conn.close()
+
+
 def migrate_hook_columns():
     """Add hook analysis columns to existing posts table."""
     conn = get_conn()
@@ -979,3 +993,4 @@ if DATABASE_URL:
     migrate_hook_columns()
     migrate_audio_columns()
     migrate_bignum_columns()
+    migrate_indexes()

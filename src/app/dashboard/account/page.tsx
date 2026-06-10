@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useSession } from 'next-auth/react';
+import { useSession, signOut } from 'next-auth/react';
 import { formatNumber } from '@/lib/format';
 
 interface Overview {
@@ -34,6 +34,26 @@ export default function AccountPage() {
   const [pwLoading, setPwLoading] = useState(false);
   const [pwError, setPwError] = useState('');
   const [pwSuccess, setPwSuccess] = useState('');
+
+  const [deleting, setDeleting] = useState(false);
+  const handleDeleteAccount = async () => {
+    if (!window.confirm('Permanently delete your account and all your data? This cannot be undone.')) {
+      return;
+    }
+    setDeleting(true);
+    try {
+      const res = await fetch('/api/account', { method: 'DELETE' });
+      if (res.ok) {
+        await signOut({ callbackUrl: '/' });
+        return;
+      }
+      alert('Could not delete your account. Please try again or contact support.');
+    } catch {
+      alert('Something went wrong deleting your account.');
+    } finally {
+      setDeleting(false);
+    }
+  };
 
   const handleChangePassword = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -189,6 +209,22 @@ export default function AccountPage() {
             </div>
           </div>
         </div>
+      </div>
+
+      {/* Danger zone */}
+      <div className="bg-white rounded-2xl p-6 card-shadow border border-red-100">
+        <h2 className="text-lg font-semibold text-red-700 mb-2">Delete account</h2>
+        <p className="text-sm text-gray-600 mb-4">
+          Permanently delete your account and all associated data (tracked accounts,
+          saved hooks, playbook). This cannot be undone.
+        </p>
+        <button
+          onClick={handleDeleteAccount}
+          disabled={deleting}
+          className="px-5 py-2.5 bg-red-600 text-white rounded-xl text-sm font-medium hover:bg-red-700 transition-colors disabled:opacity-50"
+        >
+          {deleting ? 'Deleting…' : 'Delete my account'}
+        </button>
       </div>
     </div>
   );
