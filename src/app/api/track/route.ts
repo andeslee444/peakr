@@ -2,8 +2,22 @@ import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import { getPool } from '@/lib/db';
 import { enforceRateLimitFor } from '@/lib/rate-limit';
+import { assertSafeUrl } from '@/lib/ssrf';
 
 const USERNAME_RE = /^[a-zA-Z0-9_.]{1,30}$/;
+// Avatar URLs are client-supplied and rendered to other users; only accept
+// known platform CDN hosts, else drop it and let the scraper repopulate.
+const AVATAR_HOSTS = ['cdninstagram.com', 'fbcdn.net', 'instagram.com', 'tiktokcdn.com', 'tiktok.com'];
+
+function safeAvatar(url: unknown): string | null {
+  if (typeof url !== 'string' || !url) return null;
+  try {
+    assertSafeUrl(url, AVATAR_HOSTS);
+    return url;
+  } catch {
+    return null;
+  }
+}
 
 export async function POST(req: NextRequest) {
   try {
@@ -40,7 +54,7 @@ export async function POST(req: NextRequest) {
          avatar_url = COALESCE(NULLIF(profiles.avatar_url, ''), EXCLUDED.avatar_url),
          followers = GREATEST(profiles.followers, EXCLUDED.followers),
          post_count = GREATEST(profiles.post_count, EXCLUDED.post_count)`,
-      [clean, platform, display_name || null, avatar_url || null, followers || 0, post_count || 0]
+      [clean, platform, display_name || null, safeAvatar(avatar_url), followers || 0, post_count || 0]
     );
 
     // Read back from DB

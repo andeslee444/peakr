@@ -6,145 +6,97 @@ Track viral content on Instagram and TikTok. Find what's working, fast.
 
 - **Track Public Accounts** — Monitor any public Instagram or TikTok creator
 - **Viral Scores** — Engagement-based scoring that shows which posts outperform a creator's average
-- **Sort & Filter** — Rank content by viral score, views, or recency across platforms
-- **Save to Library** — Bookmark posts into folders for reference
+- **Hook Lab** — Analyze what makes top hooks work (transcript + AI hook analysis)
+- **Playbook** — Generate personalized hook templates from the hooks you save
+- **Save & Collections** — Bookmark patterns and organize them into collections
 - **Export Data** — Download CSV/JSON for offline analysis
-- **Analytics Dashboard** — Compare accounts side-by-side with engagement rates and top content
 
-## Tech Stack
+## Architecture
+
+```
+Vercel (Next.js)  ──────┐
+                         ├──▶  AWS RDS PostgreSQL
+Mac Mini (Python) ───────┘
+```
 
 | Layer | Technology |
 |-------|-----------|
 | Frontend | Next.js 14 (App Router), React 18, TypeScript, Tailwind CSS v4 |
-| Backend | Next.js API routes, better-sqlite3 (synchronous SQLite) |
-| Scraper | Python 3 — Camoufox/Playwright (Instagram), curl_cffi + yt-dlp (TikTok) |
-| Database | SQLite with WAL mode at `data/peakr.db` |
+| Backend | Next.js API routes, PostgreSQL via `pg` pool (AWS RDS) |
+| Auth | Auth.js v5 (TikTok OAuth + email/password), JWT sessions |
+| Scraper | Python 3 daemon on a Mac Mini — Camoufox/Playwright (Instagram), curl_cffi + yt-dlp (TikTok) |
+| Integrations | Resend (email), Stripe (billing), Sentry (errors) — all gated on env vars |
 
 ## Getting Started
 
 ### Prerequisites
 
 - Node.js 18+
-- Python 3.10+
+- Python 3.10+ (for the scraper, run on the Mac Mini)
+- A PostgreSQL database (`DATABASE_URL`)
 
 ### Install & Run
 
 ```bash
-# Install Node dependencies
 npm install
+npm run dev            # dev server at localhost:3000
 
-# Install Python scraper dependencies
-pip3 install --break-system-packages curl_cffi 'camoufox[geoip]'
-brew install yt-dlp  # or pip3 install yt-dlp
-
-# Start the dev server
-npm run dev
+# Scraper deps (on the Mac Mini)
+pip3 install --break-system-packages -r requirements.txt
+brew install yt-dlp
 ```
-
-Open [http://localhost:3000](http://localhost:3000). The SQLite database is created automatically on first API call.
 
 ### Commands
 
 ```bash
-npm run dev       # Dev server at localhost:3000
-npm run build     # Production build
-npm run start     # Production server
-npm run lint      # ESLint
+npm run dev        # Dev server
+npm run build      # Production build
+npm run start      # Production server
+npm run lint       # ESLint (flat config, v9)
+npm run test       # Vitest (watch)
+npm run test:run   # Vitest (once)
 
-# Scrape directly from CLI
-python3 -m scraper.tiktok @username
-python3 -m scraper.instagram @username
-python3 -m scraper.instagram --login   # Interactive login for session cookies
+python3 -m pytest                       # Python tests (Docker Postgres for db-marked tests)
+python3 scraper/daemon.py               # Background scraping daemon (use the launchd plist in deploy/)
+python3 -m scraper.tiktok @username     # Scrape a TikTok profile
+python3 -m scraper.instagram @username  # Scrape an Instagram profile
 ```
+
+## Environment Variables
+
+**Web (`.env.local`)**: `DATABASE_URL`, `AUTH_SECRET`, `AUTH_TIKTOK_ID`, `AUTH_TIKTOK_SECRET`, `AUTH_URL`, `DEEPSEEK_API_KEY`. Optional integrations: `RESEND_API_KEY` + `EMAIL_FROM` (password reset), `STRIPE_SECRET_KEY` + `STRIPE_WEBHOOK_SECRET` + `STRIPE_PRICE_MONTHLY`/`STRIPE_PRICE_ANNUAL` (billing), `SENTRY_DSN` (errors), `DATABASE_CA_CERT` (pin RDS TLS), `DATABASE_POOL_MAX`.
+
+**Scraper (Mac Mini)**: `DATABASE_URL`, optionally `SENTRY_DSN`, `WORKER_ID`, AWS creds for S3.
 
 ## How It Works
 
-### Data Flow
-
-1. User enters a username and platform in the dashboard Track form
-2. `POST /api/track` spawns a Python scraper subprocess (90s timeout)
-3. Scraper fetches profile metadata + post data, writes to SQLite
-4. API reads the profile back from the DB and returns it to the client
-5. Dashboard re-fetches and displays the tracked account with its content
+1. User signs in (TikTok OAuth or email/password) → Auth.js JWT session.
+2. User tracks a username → `POST /api/track` inserts a profile row and enqueues a scrape.
+3. The Mac Mini daemon picks up new/stale profiles, scrapes metadata + posts, runs hook analysis, and writes to PostgreSQL. It records a heartbeat (`/api/worker-status` reports liveness).
+4. Dashboard pages read from API routes.
 
 ### Viral Score
-
-Both platforms use the same formula:
 
 ```
 viral_score = (likes + comments) / avg(likes + comments) across all posts for that creator
 ```
 
-A score of 2.0x means the post got double the creator's typical engagement. This normalizes across creators with different audience sizes.
+A score of 2.0x means double the creator's typical engagement, normalizing across audience sizes.
 
-### Scraper Details
+### Dual schema
 
-**Instagram:** Uses Camoufox (a Playwright-based stealth browser) to load profile pages and intercept Instagram's internal API responses. Supports optional login sessions stored in `data/cookies/` for accessing more data. Falls back through multiple extraction strategies (API, GraphQL intercept, page source parsing, meta tags).
+The schema is defined in **both** `src/lib/db.ts` (web) and `scraper/db.py` (daemon); both auto-create/migrate on first access and must stay in sync.
 
-**TikTok:** Uses curl_cffi with browser impersonation to fetch profile metadata from the page's embedded JSON (`__UNIVERSAL_DATA_FOR_REHYDRATION__`). Video data is fetched via yt-dlp, which handles TikTok's request signing that the raw API requires.
+## Testing
 
-**Daemon:** `python3 scraper/daemon.py` runs a background process that re-scrapes stale profiles (>4 hours old) with rate limiting and jitter.
+- **Vitest** (`tests/`) — unit + route tests for the Next.js app.
+- **pytest** (`scraper/tests/`) — pure-logic tests plus integration tests against a throwaway Dockerized Postgres (db-marked tests skip if Docker is unavailable). Production RDS is never used by tests.
 
-## Project Structure
+## Operations
 
-```
-src/
-├── app/
-│   ├── page.tsx                    # Landing page
-│   ├── login/page.tsx              # Login (mock)
-│   ├── signup/page.tsx             # Signup (mock)
-│   ├── dashboard/
-│   │   ├── layout.tsx              # Sidebar navigation
-│   │   ├── page.tsx                # Main dashboard — track accounts, view top content
-│   │   ├── explore/page.tsx        # Browse all tracked content
-│   │   ├── saved/page.tsx          # Saved posts with folder management
-│   │   ├── analytics/page.tsx      # Account comparison and stats
-│   │   └── account/page.tsx        # Account settings (mock)
-│   └── api/
-│       ├── track/route.ts          # POST — trigger scraper for a username
-│       ├── profiles/route.ts       # GET — list tracked profiles
-│       ├── profiles/[username]/    # GET/DELETE — single profile
-│       ├── explore/route.ts        # GET — sorted/filtered post feed
-│       ├── saved/route.ts          # GET/POST — saved posts
-│       ├── saved/[id]/route.ts     # DELETE — remove saved post
-│       ├── search/route.ts         # GET — search tracked profiles
-│       ├── analytics/route.ts      # GET — aggregated stats
-│       └── export/route.ts         # GET — CSV/JSON export
-├── components/                     # Landing page components
-│   ├── Navigation.tsx
-│   ├── Hero.tsx
-│   ├── Features.tsx
-│   ├── Pricing.tsx
-│   ├── FAQ.tsx
-│   └── Footer.tsx
-└── lib/
-    ├── db.ts                       # SQLite connection singleton + schema
-    ├── format.ts                   # Number formatting helpers
-    └── types.ts                    # TypeScript interfaces
-
-scraper/
-├── instagram.py                    # Instagram scraper (Camoufox + Playwright)
-├── tiktok.py                       # TikTok scraper (curl_cffi + yt-dlp)
-├── db.py                           # Python SQLite interface (mirrors db.ts schema)
-├── daemon.py                       # Background re-scraping daemon
-├── proxy.py                        # SOCKS5/WARP proxy config
-└── utils.py                        # Random delays, cookie management, UA rotation
-```
-
-## Database Schema
-
-Four tables, auto-created on first access:
-
-- **profiles** — Tracked accounts (username, platform, followers, avatar, etc.)
-- **posts** — Individual content items (views, likes, comments, shares, viral_score)
-- **saved_posts** — User bookmarks with folder organization
-- **scrape_log** — Scraping history with timing and error tracking
-
-Posts are upserted via `ON CONFLICT(profile_id, platform_id)` to avoid duplicates on re-scrape.
-
-## Status
-
-MVP with mock authentication. Login/signup forms work visually but don't enforce access control. The scraping infrastructure is functional — TikTok works out of the box, Instagram requires a Camoufox-compatible environment and optionally a logged-in session for full data access.
+- Run the daemon under launchd using `deploy/com.peakr.daemon.plist` (KeepAlive restarts on crash).
+- RDS hardening steps (password rotation, TLS, ingress lockdown, backups) are in `docs/runbooks/rds-hardening.md`.
+- Pre-launch audit + remediation tracker: `LAUNCH-AUDIT.md` and `docs/superpowers/plans/2026-06-10-launch-hardening.md`.
 
 ## License
 

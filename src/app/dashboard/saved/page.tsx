@@ -172,6 +172,7 @@ export default function MyHooksPage() {
   };
 
   const deleteCollection = async (collectionId: number) => {
+    if (!window.confirm('Delete this collection? This cannot be undone.')) return;
     try {
       await fetch('/api/collections', {
         method: 'DELETE',
@@ -278,6 +279,7 @@ export default function MyHooksPage() {
   };
 
   const deleteHook = async (patternId: number) => {
+    if (!window.confirm('Remove this hook from My Hooks?')) return;
     try {
       await fetch('/api/user-hooks', {
         method: 'DELETE',

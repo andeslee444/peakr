@@ -149,6 +149,7 @@ export default function TrackedPage() {
   };
 
   const untrackUser = async (username: string, platform: string) => {
+    if (!window.confirm(`Stop tracking @${username}?`)) return;
     await fetch(`/api/profiles/${encodeURIComponent(username)}?platform=${platform}`, {
       method: 'DELETE',
     });

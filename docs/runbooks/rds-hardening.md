@@ -69,6 +69,19 @@ and `copy_tags_to_snapshot = true`. `terraform apply` enables these without
 affecting connectivity. Consider also enabling automated snapshots export and a
 longer retention if data volume warrants.
 
+## 4b. Move Terraform state off the laptop
+
+`terraform/terraform.tfstate` holds the DB password in plaintext. It is gitignored
+(never committed — verified), but it still lives in the working tree. Move it to a
+remote backend so the secret isn't sitting on disk and state is shared safely:
+
+```hcl
+# terraform/backend.tf
+terraform { backend "s3" { bucket = "peakr-tfstate" key = "rds.tfstate" region = "us-east-1" encrypt = true } }
+```
+Then `terraform init -migrate-state`. After rotating the password (step 1), the old
+local state still contains the old secret — delete it once migrated.
+
 ## 5. Verify
 
 ```bash
