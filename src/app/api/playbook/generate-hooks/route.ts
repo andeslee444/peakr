@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import { getPool } from '@/lib/db';
 import { enforceRateLimitFor } from '@/lib/rate-limit';
+import { fetchWithTimeout } from '@/lib/llm';
+
+export const maxDuration = 60;
 
 export async function POST(request: NextRequest) {
   const session = await auth();
@@ -134,7 +137,7 @@ HOOK STYLES TO DRAW FROM:
 ${hookExamples}`;
 
   try {
-    const resp = await fetch('https://api.deepseek.com/chat/completions', {
+    const resp = await fetchWithTimeout('https://api.deepseek.com/chat/completions', {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${apiKey}`,
@@ -148,7 +151,7 @@ ${hookExamples}`;
         ],
         response_format: { type: 'json_object' },
       }),
-    });
+    }, 30_000);
 
     if (!resp.ok) {
       const errText = await resp.text();
