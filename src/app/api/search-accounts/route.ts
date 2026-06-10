@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import { getPool } from '@/lib/db';
+import { enforceRateLimit } from '@/lib/rate-limit';
 
 interface SearchResult {
   username: string;
@@ -100,6 +101,10 @@ async function lookupTikTokUser(query: string): Promise<SearchResult[]> {
 }
 
 export async function GET(req: NextRequest) {
+  // External platform lookups run from our servers, so throttle per client IP.
+  const limited = enforceRateLimit(req, 'search-accounts', 30, 60_000);
+  if (limited) return limited;
+
   const q = req.nextUrl.searchParams.get('q')?.trim() || '';
   const platform = req.nextUrl.searchParams.get('platform') || 'tiktok';
 

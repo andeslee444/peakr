@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import { getPool } from '@/lib/db';
+import { enforceRateLimitFor } from '@/lib/rate-limit';
 import type { CreatorSuggestion, SuggestionHook } from '@/lib/types';
 
 const ADJACENT: Record<string, string[]> = {
@@ -26,6 +27,8 @@ export async function POST(request: NextRequest) {
   if (!session?.user?.id) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
+  const limited = enforceRateLimitFor(`suggestions:${session.user.id}`, 15, 60_000);
+  if (limited) return limited;
 
   const body = await request.json();
   const { niche, content_style, target_audience, unique_angle, content_topics } = body;

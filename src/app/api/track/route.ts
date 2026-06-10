@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import { getPool } from '@/lib/db';
+import { enforceRateLimitFor } from '@/lib/rate-limit';
 
 const USERNAME_RE = /^[a-zA-Z0-9_.]{1,30}$/;
 
@@ -11,6 +12,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
     const userId = Number(session.user.id);
+    const limited = enforceRateLimitFor(`track:${userId}`, 30, 60_000);
+    if (limited) return limited;
 
     const { username, platform = 'tiktok', display_name, avatar_url, followers, post_count } = await req.json();
     if (!username) {

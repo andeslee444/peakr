@@ -4,6 +4,7 @@ import Credentials from 'next-auth/providers/credentials';
 import bcrypt from 'bcryptjs';
 import { getPool } from './db';
 import { normalizeEmail } from './auth-validation';
+import { rateLimit } from './rate-limit';
 
 export const { handlers, signIn, signOut, auth } = NextAuth({
   trustHost: true,
@@ -23,6 +24,12 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
 
           // Normalize so case/whitespace variants resolve to the same account.
           const email = normalizeEmail(String(credentials.email));
+
+          // Throttle brute-force / credential-stuffing per email.
+          if (!rateLimit(`login:${email}`, 10, 15 * 60 * 1000).allowed) {
+            return null;
+          }
+
           const pool = getPool();
           const { rows: [user] } = await pool.query(
             'SELECT id, email, password_hash, username, display_name FROM users WHERE email = $1',

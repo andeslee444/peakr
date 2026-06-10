@@ -4,6 +4,7 @@ vi.mock('@/lib/db', () => ({ getPool: vi.fn() }));
 vi.mock('bcryptjs', () => ({ default: { hash: vi.fn(async () => 'HASH') } }));
 import { getPool } from '@/lib/db';
 import { POST } from '@/app/api/auth/signup/route';
+import { resetRateLimitStore } from '@/lib/rate-limit';
 
 const mockGetPool = vi.mocked(getPool);
 
@@ -22,7 +23,10 @@ function req(body: unknown) {
 }
 
 describe('POST /api/auth/signup', () => {
-  beforeEach(() => mockGetPool.mockReset());
+  beforeEach(() => {
+    mockGetPool.mockReset();
+    resetRateLimitStore();
+  });
 
   it('rejects an invalid email format', async () => {
     poolWith(() => ({ rows: [] }));
@@ -56,5 +60,20 @@ describe('POST /api/auth/signup', () => {
     });
     const res = await POST(req({ email: 'FOO@example.com', password: 'hunter2pass' }));
     expect(res.status).toBe(409);
+  });
+
+  it('rate-limits repeated signups from the same IP', async () => {
+    poolWith(() => ({ rows: [] }));
+    const fromIp = (body: unknown) =>
+      new Request('https://app.peakr.test/api/auth/signup', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-forwarded-for': '198.51.100.9' },
+        body: JSON.stringify(body),
+      });
+    let last: Response | undefined;
+    for (let i = 0; i < 7; i++) {
+      last = await POST(fromIp({ email: `u${i}@b.com`, password: 'hunter2pass' }));
+    }
+    expect(last!.status).toBe(429);
   });
 });

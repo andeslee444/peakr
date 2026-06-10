@@ -2,8 +2,12 @@ import { NextResponse } from 'next/server';
 import bcrypt from 'bcryptjs';
 import { getPool } from '@/lib/db';
 import { normalizeEmail, isValidEmail, passwordError } from '@/lib/auth-validation';
+import { enforceRateLimit } from '@/lib/rate-limit';
 
 export async function POST(request: Request) {
+  const limited = enforceRateLimit(request, 'signup', 5, 60_000);
+  if (limited) return limited;
+
   const { email, password, name } = await request.json();
 
   if (!email || !password) {

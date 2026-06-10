@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import { getPool } from '@/lib/db';
+import { enforceRateLimitFor } from '@/lib/rate-limit';
 
 export async function POST(request: NextRequest) {
   const session = await auth();
@@ -9,6 +10,9 @@ export async function POST(request: NextRequest) {
   }
 
   const userId = Number(session.user.id);
+  const limited = enforceRateLimitFor(`regenerate:${userId}`, 15, 60_000);
+  if (limited) return limited;
+
   const body = await request.json();
   const { hook_type, niche, section_id } = body;
 
