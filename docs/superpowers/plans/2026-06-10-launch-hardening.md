@@ -12,6 +12,27 @@
 
 ---
 
+## Progress (updated 2026-06-10) — branch `launch-hardening`
+
+**✅ Wave 1 (all 5 criticals + key highs) — DONE & tested.** SSRF guards + auth on
+image-proxy/video-url; auth on 8 unauthenticated routes; analyze-hook auth +
+ownership + daily cap; daemon livelock fixed (failure markers + retry caps); RDS
+TLS verification + serverless pool sizing; Terraform hardening prepared + runbook.
+
+**✅ Wave 2 (all high-severity security + data) — DONE & tested.** PII logging
+removed; email normalization; password policy; rate limiting (login/signup/AI/
+scrape); fresh-DB bootstrap ordering fixed; BIGINT engagement counters;
+saved_posts scoped per-user with auth on all saved routes; session maxAge.
+
+**Gate status:** 42 Vitest tests + 23 pytest tests pass; `tsc --noEmit` clean;
+`npm run build` succeeds.
+
+**⏳ Remaining:** Wave 3 (Stripe / Sentry / password-reset integrations),
+Wave 4 (scraper reliability), Wave 5 (AI robustness), Wave 6 (frontend/UX),
+Wave 7 (infra-prep, lint drift, Terms/Privacy, README, indexes, account deletion).
+
+---
+
 ## Wave 1 — Critical security + daemon livelock
 
 - [ ] **1.1 SSRF guard (`image-proxy`, `video-url`)** — CRITICAL
