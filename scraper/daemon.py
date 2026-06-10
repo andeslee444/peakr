@@ -32,6 +32,7 @@ from scraper.db import (
     generate_viral_post_notifications, reclaim_stale_queue_entries, record_heartbeat,
 )
 from scraper.observability import init_sentry, capture_exception
+from scraper.backoff import should_attempt
 
 WORKER_ID = os.environ.get("WORKER_ID", "mac-mini")
 
@@ -180,6 +181,8 @@ def run_daemon():
         log.error(f"[STARTUP] Hook patterns backfill error: {e}")
 
     last_refresh = 0
+    # Per-profile consecutive-failure tracking for exponential backoff (in-memory).
+    scrape_failures: dict = {}
 
     # Track which scheduled jobs have run today
     last_daily_top50 = None       # Daily at midnight EST
@@ -321,18 +324,27 @@ def run_daemon():
                         for username, platform in stale:
                             if not running:
                                 break
+                            # Skip profiles in exponential backoff after repeated failures.
+                            key = (username, platform)
+                            fstate = scrape_failures.get(key, {"failures": 0, "last": 0.0})
+                            if not should_attempt(fstate["failures"], fstate["last"], time.time()):
+                                continue
                             log.info(f"Scraping {platform}/@{username}")
                             try:
                                 ok = scrape_one(username, platform)
                                 log.info(f"{'done' if ok else 'error'} {platform}/@{username}")
                                 if ok:
+                                    scrape_failures.pop(key, None)
                                     try:
                                         n = generate_viral_post_notifications(username, platform)
                                         if n:
                                             log.info(f"[NOTIFY] Sent {n} viral post notifications for @{username}")
                                     except Exception as e:
                                         log.error(f"[NOTIFY] Error generating notifications: {e}")
+                                else:
+                                    scrape_failures[key] = {"failures": fstate["failures"] + 1, "last": time.time()}
                             except Exception as e:
+                                scrape_failures[key] = {"failures": fstate["failures"] + 1, "last": time.time()}
                                 log.error(f"Error scraping {platform}/@{username}: {e}")
 
                             delay = RATE_LIMITS.get(platform, 60) + random.uniform(0, 15)

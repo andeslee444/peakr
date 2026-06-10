@@ -27,6 +27,23 @@ COOKIE_FILE = COOKIE_DIR / "instagram.json"
 IG_APP_ID = "936619743392459"
 
 
+def resolve_ig_proxy(proxy_running: bool, proxy_required: bool) -> Optional[Dict]:
+    """Decide the proxy launch option for Instagram scraping.
+
+    - proxy running        -> route through it (avoid exposing the home IP)
+    - down, not required    -> None (direct; caller logs a warning)
+    - down, required        -> raise (refuse to scrape from the raw IP)
+    """
+    if proxy_running:
+        from scraper.proxy import get_proxy_config
+        return get_proxy_config()
+    if proxy_required:
+        raise RuntimeError(
+            "IG_PROXY_REQUIRED=1 but wireproxy is not running — refusing to scrape from the raw IP"
+        )
+    return None
+
+
 class BrowserSession:
     """Context manager wrapping Playwright Chromium with cookie loading.
     Falls back from Camoufox to standard Playwright if Camoufox is broken.
@@ -40,8 +57,23 @@ class BrowserSession:
 
     def __enter__(self):
         from playwright.sync_api import sync_playwright
+        from scraper.proxy import is_wireproxy_running
         self._pw = sync_playwright().start()
-        self._browser = self._pw.chromium.launch(headless=self.headless)
+        launch_kwargs = {"headless": self.headless}
+        try:
+            proxy = resolve_ig_proxy(
+                is_wireproxy_running(),
+                os.environ.get("IG_PROXY_REQUIRED") == "1",
+            )
+        except Exception:
+            self._pw.stop()
+            raise
+        if proxy:
+            launch_kwargs["proxy"] = proxy
+            log.info("Instagram scraping via proxy")
+        else:
+            log.warning("wireproxy not running — Instagram scraping from the direct IP")
+        self._browser = self._pw.chromium.launch(**launch_kwargs)
         self.ctx = self._browser.new_context(
             user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
         )
