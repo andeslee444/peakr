@@ -102,6 +102,7 @@ def scraper_db(test_dsn):
     _db.init_db()
     _db.migrate_audio_columns()
     _db.migrate_hook_columns()
+    _db.migrate_bignum_columns()
     return _db
 
 

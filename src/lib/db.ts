@@ -46,9 +46,9 @@ async function initSchema() {
       display_name TEXT,
       bio TEXT,
       avatar_url TEXT,
-      followers INTEGER DEFAULT 0,
-      following INTEGER DEFAULT 0,
-      total_likes INTEGER DEFAULT 0,
+      followers BIGINT DEFAULT 0,
+      following BIGINT DEFAULT 0,
+      total_likes BIGINT DEFAULT 0,
       post_count INTEGER DEFAULT 0,
       avg_views REAL DEFAULT 0,
       last_scraped_at TIMESTAMPTZ,
@@ -63,10 +63,10 @@ async function initSchema() {
       post_url TEXT,
       thumbnail_url TEXT,
       description TEXT,
-      views INTEGER DEFAULT 0,
-      likes INTEGER DEFAULT 0,
-      comments INTEGER DEFAULT 0,
-      shares INTEGER DEFAULT 0,
+      views BIGINT DEFAULT 0,
+      likes BIGINT DEFAULT 0,
+      comments BIGINT DEFAULT 0,
+      shares BIGINT DEFAULT 0,
       duration_seconds INTEGER,
       is_video BOOLEAN DEFAULT FALSE,
       viral_score REAL DEFAULT 0,
@@ -114,7 +114,6 @@ async function initSchema() {
     ALTER TABLE profiles ADD COLUMN IF NOT EXISTS primary_niche TEXT;
     ALTER TABLE posts ADD COLUMN IF NOT EXISTS keyframe_base64 TEXT;
     ALTER TABLE posts ADD COLUMN IF NOT EXISTS s3_thumbnail_url TEXT;
-    ALTER TABLE creator_profiles ADD COLUMN IF NOT EXISTS content_topics TEXT;
     ALTER TABLE posts ADD COLUMN IF NOT EXISTS audio_name TEXT;
     ALTER TABLE posts ADD COLUMN IF NOT EXISTS audio_author TEXT;
   `);
@@ -164,6 +163,7 @@ async function initSchema() {
       platforms JSONB,
       inspiration_creators JSONB,
       background_qa JSONB,
+      content_topics TEXT,
       onboarding_step TEXT DEFAULT 'not_started',
       completed_at TIMESTAMPTZ,
       updated_at TIMESTAMPTZ DEFAULT NOW(),
@@ -323,6 +323,21 @@ async function initSchema() {
   await pool.query(`
     CREATE UNIQUE INDEX IF NOT EXISTS playbook_sections_user_type_niche_key
     ON playbook_sections(user_id, COALESCE(hook_type, ''), COALESCE(niche, ''));
+  `);
+  // Migrations for existing databases (run last, after every table exists).
+  // content_topics was previously ALTERed before creator_profiles was created,
+  // which aborted a fresh-DB bootstrap; it now lives in the CREATE plus this
+  // safe backfill. Engagement counters widen to BIGINT (mega-creators exceed
+  // 32-bit range).
+  await pool.query(`
+    ALTER TABLE creator_profiles ADD COLUMN IF NOT EXISTS content_topics TEXT;
+    ALTER TABLE posts   ALTER COLUMN views    TYPE BIGINT;
+    ALTER TABLE posts   ALTER COLUMN likes    TYPE BIGINT;
+    ALTER TABLE posts   ALTER COLUMN comments TYPE BIGINT;
+    ALTER TABLE posts   ALTER COLUMN shares   TYPE BIGINT;
+    ALTER TABLE profiles ALTER COLUMN followers   TYPE BIGINT;
+    ALTER TABLE profiles ALTER COLUMN following   TYPE BIGINT;
+    ALTER TABLE profiles ALTER COLUMN total_likes TYPE BIGINT;
   `);
   _schemaInitialized = true;
 }

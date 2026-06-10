@@ -32,9 +32,9 @@ CREATE TABLE IF NOT EXISTS profiles (
   display_name TEXT,
   bio TEXT,
   avatar_url TEXT,
-  followers INTEGER DEFAULT 0,
-  following INTEGER DEFAULT 0,
-  total_likes INTEGER DEFAULT 0,
+  followers BIGINT DEFAULT 0,
+  following BIGINT DEFAULT 0,
+  total_likes BIGINT DEFAULT 0,
   post_count INTEGER DEFAULT 0,
   avg_views REAL DEFAULT 0,
   last_scraped_at TIMESTAMPTZ,
@@ -49,10 +49,10 @@ CREATE TABLE IF NOT EXISTS posts (
   post_url TEXT,
   thumbnail_url TEXT,
   description TEXT,
-  views INTEGER DEFAULT 0,
-  likes INTEGER DEFAULT 0,
-  comments INTEGER DEFAULT 0,
-  shares INTEGER DEFAULT 0,
+  views BIGINT DEFAULT 0,
+  likes BIGINT DEFAULT 0,
+  comments BIGINT DEFAULT 0,
+  shares BIGINT DEFAULT 0,
   duration_seconds INTEGER,
   is_video BOOLEAN DEFAULT FALSE,
   viral_score REAL DEFAULT 0,
@@ -403,6 +403,28 @@ def migrate_audio_columns():
     cur.execute("""
         ALTER TABLE posts ADD COLUMN IF NOT EXISTS audio_name TEXT;
         ALTER TABLE posts ADD COLUMN IF NOT EXISTS audio_author TEXT;
+    """)
+    conn.commit()
+    cur.close()
+    conn.close()
+
+
+def migrate_bignum_columns():
+    """Widen engagement counters to BIGINT for existing databases.
+
+    Mega-creators have view/like totals beyond 32-bit INTEGER range (>2.1B),
+    which would otherwise raise 'integer out of range' on insert.
+    """
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        ALTER TABLE posts ALTER COLUMN views TYPE BIGINT;
+        ALTER TABLE posts ALTER COLUMN likes TYPE BIGINT;
+        ALTER TABLE posts ALTER COLUMN comments TYPE BIGINT;
+        ALTER TABLE posts ALTER COLUMN shares TYPE BIGINT;
+        ALTER TABLE profiles ALTER COLUMN followers TYPE BIGINT;
+        ALTER TABLE profiles ALTER COLUMN following TYPE BIGINT;
+        ALTER TABLE profiles ALTER COLUMN total_likes TYPE BIGINT;
     """)
     conn.commit()
     cur.close()
@@ -916,3 +938,4 @@ if DATABASE_URL:
     init_db()
     migrate_hook_columns()
     migrate_audio_columns()
+    migrate_bignum_columns()
