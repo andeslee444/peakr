@@ -1,9 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getPool } from '@/lib/db';
 import { getUserId, unauthorized } from '@/lib/api-auth';
-
-/** Max manual hook-analysis requests a single user can trigger per rolling day. */
-export const DAILY_MANUAL_ANALYSIS_CAP = 25;
+import { DAILY_MANUAL_ANALYSIS_CAP } from '@/lib/analysis-limits';
 
 export async function POST(request: Request) {
   const userId = await getUserId();

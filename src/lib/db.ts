@@ -1,15 +1,18 @@
 import { Pool } from 'pg';
+import { buildSslConfig } from './db-ssl';
 
 let _pool: Pool | null = null;
 
 export function getPool(): Pool {
   if (!_pool) {
+    // On Vercel each serverless instance gets its own pool, so keep `max` small
+    // to avoid exhausting RDS max_connections under concurrency. Override with
+    // DATABASE_POOL_MAX if running against a connection pooler / proxy.
+    const poolMax = Number(process.env.DATABASE_POOL_MAX) || 3;
     _pool = new Pool({
       connectionString: process.env.DATABASE_URL,
-      max: 10,
-      ssl: process.env.DATABASE_URL?.includes('rds.amazonaws.com')
-        ? { rejectUnauthorized: false }
-        : undefined,
+      max: poolMax,
+      ssl: buildSslConfig(process.env.DATABASE_URL, process.env),
     });
     // Initialize schema on first connection
     _pool.on('connect', () => {});

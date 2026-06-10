@@ -4,7 +4,8 @@ vi.mock('@/lib/auth', () => ({ auth: vi.fn() }));
 vi.mock('@/lib/db', () => ({ getPool: vi.fn() }));
 import { auth } from '@/lib/auth';
 import { getPool } from '@/lib/db';
-import { POST, DAILY_MANUAL_ANALYSIS_CAP } from '@/app/api/analyze-hook/route';
+import { POST } from '@/app/api/analyze-hook/route';
+import { DAILY_MANUAL_ANALYSIS_CAP } from '@/lib/analysis-limits';
 
 const mockAuth = vi.mocked(auth);
 const mockGetPool = vi.mocked(getPool);

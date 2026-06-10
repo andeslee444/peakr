@@ -18,10 +18,10 @@ data "aws_vpc" "default" {
   default = true
 }
 
-# Security group: allow PostgreSQL from anywhere (Vercel uses dynamic IPs)
+# Security group: allow PostgreSQL only from explicitly allowlisted CIDRs.
 resource "aws_security_group" "peakr_rds" {
   name        = "peakr-rds-sg"
-  description = "Allow PostgreSQL inbound from anywhere"
+  description = "Allow PostgreSQL inbound from allowlisted CIDRs"
   vpc_id      = data.aws_vpc.default.id
 
   ingress {
@@ -29,7 +29,7 @@ resource "aws_security_group" "peakr_rds" {
     from_port   = 5432
     to_port     = 5432
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+    cidr_blocks = var.allowed_cidr_blocks
   }
 
   egress {
@@ -59,12 +59,18 @@ resource "aws_db_instance" "peakr" {
   username = var.db_username
   password = var.db_password
 
-  publicly_accessible    = true
-  skip_final_snapshot    = true
+  publicly_accessible    = var.db_publicly_accessible
   vpc_security_group_ids = [aws_security_group.peakr_rds.id]
 
-  backup_retention_period = 1
-  storage_encrypted       = true
+  # Recovery posture: keep a week of automated backups, take a final snapshot on
+  # destroy, and refuse accidental deletion.
+  backup_retention_period   = var.backup_retention_days
+  skip_final_snapshot       = false
+  final_snapshot_identifier = "peakr-db-final-snapshot"
+  deletion_protection       = true
+  copy_tags_to_snapshot     = true
+
+  storage_encrypted = true
 
   tags = {
     Name    = "peakr-db"
