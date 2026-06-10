@@ -1,15 +1,18 @@
 import { Pool } from 'pg';
+import { buildSslConfig } from './db-ssl';
 
 let _pool: Pool | null = null;
 
 export function getPool(): Pool {
   if (!_pool) {
+    // On Vercel each serverless instance gets its own pool, so keep `max` small
+    // to avoid exhausting RDS max_connections under concurrency. Override with
+    // DATABASE_POOL_MAX if running against a connection pooler / proxy.
+    const poolMax = Number(process.env.DATABASE_POOL_MAX) || 3;
     _pool = new Pool({
       connectionString: process.env.DATABASE_URL,
-      max: 10,
-      ssl: process.env.DATABASE_URL?.includes('rds.amazonaws.com')
-        ? { rejectUnauthorized: false }
-        : undefined,
+      max: poolMax,
+      ssl: buildSslConfig(process.env.DATABASE_URL, process.env),
     });
     // Initialize schema on first connection
     _pool.on('connect', () => {});
@@ -43,9 +46,9 @@ async function initSchema() {
       display_name TEXT,
       bio TEXT,
       avatar_url TEXT,
-      followers INTEGER DEFAULT 0,
-      following INTEGER DEFAULT 0,
-      total_likes INTEGER DEFAULT 0,
+      followers BIGINT DEFAULT 0,
+      following BIGINT DEFAULT 0,
+      total_likes BIGINT DEFAULT 0,
       post_count INTEGER DEFAULT 0,
       avg_views REAL DEFAULT 0,
       last_scraped_at TIMESTAMPTZ,
@@ -60,10 +63,10 @@ async function initSchema() {
       post_url TEXT,
       thumbnail_url TEXT,
       description TEXT,
-      views INTEGER DEFAULT 0,
-      likes INTEGER DEFAULT 0,
-      comments INTEGER DEFAULT 0,
-      shares INTEGER DEFAULT 0,
+      views BIGINT DEFAULT 0,
+      likes BIGINT DEFAULT 0,
+      comments BIGINT DEFAULT 0,
+      shares BIGINT DEFAULT 0,
       duration_seconds INTEGER,
       is_video BOOLEAN DEFAULT FALSE,
       viral_score REAL DEFAULT 0,
@@ -88,10 +91,12 @@ async function initSchema() {
 
     CREATE TABLE IF NOT EXISTS saved_posts (
       id SERIAL PRIMARY KEY,
-      post_id INTEGER UNIQUE REFERENCES posts(id),
+      user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      post_id INTEGER REFERENCES posts(id),
       folder TEXT DEFAULT 'default',
       notes TEXT,
-      saved_at TIMESTAMPTZ DEFAULT NOW()
+      saved_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(user_id, post_id)
     );
 
     CREATE TABLE IF NOT EXISTS scrape_queue (
@@ -102,6 +107,12 @@ async function initSchema() {
       started_at TIMESTAMPTZ,
       completed_at TIMESTAMPTZ
     );
+
+    CREATE TABLE IF NOT EXISTS worker_heartbeats (
+      worker_id TEXT PRIMARY KEY,
+      last_heartbeat_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      status TEXT
+    );
   `);
   // Migrate hook columns for existing databases
   await pool.query(`
@@ -111,7 +122,6 @@ async function initSchema() {
     ALTER TABLE profiles ADD COLUMN IF NOT EXISTS primary_niche TEXT;
     ALTER TABLE posts ADD COLUMN IF NOT EXISTS keyframe_base64 TEXT;
     ALTER TABLE posts ADD COLUMN IF NOT EXISTS s3_thumbnail_url TEXT;
-    ALTER TABLE creator_profiles ADD COLUMN IF NOT EXISTS content_topics TEXT;
     ALTER TABLE posts ADD COLUMN IF NOT EXISTS audio_name TEXT;
     ALTER TABLE posts ADD COLUMN IF NOT EXISTS audio_author TEXT;
   `);
@@ -161,6 +171,7 @@ async function initSchema() {
       platforms JSONB,
       inspiration_creators JSONB,
       background_qa JSONB,
+      content_topics TEXT,
       onboarding_step TEXT DEFAULT 'not_started',
       completed_at TIMESTAMPTZ,
       updated_at TIMESTAMPTZ DEFAULT NOW(),
@@ -282,6 +293,34 @@ async function initSchema() {
       UNIQUE(collection_id, pattern_id)
     );
   `);
+  // Billing: subscription plan + Stripe customer linkage on users
+  await pool.query(`
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS plan TEXT NOT NULL DEFAULT 'free';
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS stripe_customer_id TEXT;
+  `);
+  // Password reset tokens (only the SHA-256 hash is stored)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS password_reset_tokens (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      token_hash TEXT NOT NULL,
+      expires_at TIMESTAMPTZ NOT NULL,
+      used_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_prt_token_hash ON password_reset_tokens(token_hash);
+  `);
+  // Per-user manual analysis request log (daily-cap enforcement)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS analysis_requests (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      post_id INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_analysis_requests_user_created
+      ON analysis_requests(user_id, created_at DESC);
+  `);
   // Notifications
   await pool.query(`
     CREATE TABLE IF NOT EXISTS notifications (
@@ -297,18 +336,39 @@ async function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_notifications_user_id ON notifications(user_id);
     CREATE INDEX IF NOT EXISTS idx_notifications_created_at ON notifications(created_at DESC);
   `);
-  // Deduplicate saved_posts and add unique constraint if missing
+  // saved_posts is now per-user: add user_id, drop the old global (post_id)
+  // uniqueness, and key uniqueness on (user_id, post_id).
   await pool.query(`
-    DELETE FROM saved_posts a USING saved_posts b
-    WHERE a.id > b.id AND a.post_id = b.post_id;
-  `);
-  await pool.query(`
-    CREATE UNIQUE INDEX IF NOT EXISTS saved_posts_post_id_key ON saved_posts(post_id);
+    ALTER TABLE saved_posts ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id) ON DELETE CASCADE;
+    DROP INDEX IF EXISTS saved_posts_post_id_key;
+    ALTER TABLE saved_posts DROP CONSTRAINT IF EXISTS saved_posts_post_id_key;
+    CREATE UNIQUE INDEX IF NOT EXISTS saved_posts_user_post_key ON saved_posts(user_id, post_id);
   `);
   // Unique constraint for playbook upsert by user + hook_type + niche
   await pool.query(`
     CREATE UNIQUE INDEX IF NOT EXISTS playbook_sections_user_type_niche_key
     ON playbook_sections(user_id, COALESCE(hook_type, ''), COALESCE(niche, ''));
+  `);
+  // Migrations for existing databases (run last, after every table exists).
+  // content_topics was previously ALTERed before creator_profiles was created,
+  // which aborted a fresh-DB bootstrap; it now lives in the CREATE plus this
+  // safe backfill. Engagement counters widen to BIGINT (mega-creators exceed
+  // 32-bit range).
+  await pool.query(`
+    ALTER TABLE creator_profiles ADD COLUMN IF NOT EXISTS content_topics TEXT;
+    ALTER TABLE posts   ALTER COLUMN views    TYPE BIGINT;
+    ALTER TABLE posts   ALTER COLUMN likes    TYPE BIGINT;
+    ALTER TABLE posts   ALTER COLUMN comments TYPE BIGINT;
+    ALTER TABLE posts   ALTER COLUMN shares   TYPE BIGINT;
+    ALTER TABLE profiles ALTER COLUMN followers   TYPE BIGINT;
+    ALTER TABLE profiles ALTER COLUMN following   TYPE BIGINT;
+    ALTER TABLE profiles ALTER COLUMN total_likes TYPE BIGINT;
+  `);
+  // Indexes for hot list/sort paths (explore, export, hook-lab, profile views).
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_posts_profile_id ON posts(profile_id);
+    CREATE INDEX IF NOT EXISTS idx_posts_viral_score ON posts(viral_score DESC);
+    CREATE INDEX IF NOT EXISTS idx_posts_posted_at ON posts(posted_at DESC);
   `);
   _schemaInitialized = true;
 }

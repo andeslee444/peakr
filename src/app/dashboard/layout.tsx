@@ -64,6 +64,42 @@ export default function DashboardLayout({
   const [unreadCount, setUnreadCount] = useState(0);
   const [showNotifications, setShowNotifications] = useState(false);
   const notifRef = useRef<HTMLDivElement>(null);
+  const [upgrading, setUpgrading] = useState(false);
+  const [workerAlive, setWorkerAlive] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const check = () => {
+      fetch('/api/worker-status')
+        .then((r) => r.json())
+        .then((d) => { if (!cancelled) setWorkerAlive(d.alive !== false); })
+        .catch(() => { /* leave unknown */ });
+    };
+    check();
+    const id = setInterval(check, 60_000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, []);
+
+  const handleUpgrade = useCallback(async () => {
+    setUpgrading(true);
+    try {
+      const res = await fetch('/api/billing/checkout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ plan: 'monthly' }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.url) {
+        window.location.href = data.url;
+        return;
+      }
+      alert(data.error || 'Billing is not available yet. Please try again later.');
+    } catch {
+      alert('Something went wrong starting checkout.');
+    } finally {
+      setUpgrading(false);
+    }
+  }, []);
 
   const fetchNotifications = useCallback(async () => {
     try {
@@ -115,7 +151,10 @@ export default function DashboardLayout({
     return `${days}d ago`;
   };
 
-  const userInitial = session?.user?.name?.charAt(0)?.toUpperCase() || session?.user?.image ? null : '?';
+  // Shown only when there's no avatar image (see render below): the first letter
+  // of the name, or '?' as a fallback. (Was a precedence bug: `a || b ? null : '?'`
+  // parsed as `(a || b) ? null : '?'`, so it never showed the initial.)
+  const userInitial = session?.user?.name?.charAt(0)?.toUpperCase() || '?';
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -171,8 +210,12 @@ export default function DashboardLayout({
             <p className="text-sm text-indigo-100 mt-1">
               Track 50 accounts & more
             </p>
-            <button className="mt-3 w-full bg-white text-indigo-600 font-semibold py-2 rounded-lg hover:bg-indigo-50 transition-colors">
-              Upgrade
+            <button
+              onClick={handleUpgrade}
+              disabled={upgrading}
+              className="mt-3 w-full bg-white text-indigo-600 font-semibold py-2 rounded-lg hover:bg-indigo-50 transition-colors disabled:opacity-60"
+            >
+              {upgrading ? 'Starting…' : 'Upgrade'}
             </button>
           </div>
         </div>
@@ -275,6 +318,11 @@ export default function DashboardLayout({
 
         {/* Page content */}
         <main className="p-4 sm:p-6 pb-24 lg:pb-6">
+          {workerAlive === false && (
+            <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              Content updates are delayed right now — our scraper is catching up. Your data may not be the latest.
+            </div>
+          )}
           {children}
         </main>
       </div>

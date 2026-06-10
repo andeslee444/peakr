@@ -42,6 +42,11 @@ next-env.d.ts
 
 # python
 __pycache__/
+.pytest_cache/
+
+# test + scratch artifacts
+*.png
+.playwright-mcp/
 
 # peakr data
 /data/

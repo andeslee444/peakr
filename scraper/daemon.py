@@ -29,8 +29,12 @@ from scraper.db import (
     get_active_seed_creators, get_top_seed_creators, add_profile,
     compute_daily_top_hooks, update_profile_niches, clean_expired_video_cache,
     queue_top_posts_for_analysis, backfill_hook_patterns, recalculate_pattern_stats,
-    generate_viral_post_notifications,
+    generate_viral_post_notifications, reclaim_stale_queue_entries, record_heartbeat,
 )
+from scraper.observability import init_sentry, capture_exception
+from scraper.backoff import should_attempt
+
+WORKER_ID = os.environ.get("WORKER_ID", "mac-mini")
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("peakr-daemon")
@@ -74,11 +78,42 @@ def scrape_one(username, platform):
     return False
 
 
+def drain_scrape_queue(max_items: int = 5) -> int:
+    """Process pending on-demand scrape-queue items so user-triggered tracks
+    aren't blocked behind multi-hour seed batches. Returns count processed."""
+    processed = 0
+    while processed < max_items and running:
+        try:
+            queued = pop_scrape_queue()
+        except Exception as e:
+            log.error(f"[QUEUE] drain read error: {e}")
+            capture_exception(e)
+            break
+        if not queued:
+            break
+        queue_id, username, platform = queued
+        log.info(f"[QUEUE] (priority during seed batch) {platform}/@{username} (queue #{queue_id})")
+        try:
+            ok = scrape_one(username, platform)
+            complete_scrape_queue(queue_id, 'done' if ok else 'error')
+            if ok:
+                queue_top_posts_for_analysis(username, platform, limit=5)
+        except Exception as e:
+            complete_scrape_queue(queue_id, 'error')
+            log.error(f"[QUEUE] Error scraping {platform}/@{username}: {e}")
+        processed += 1
+    return processed
+
+
 def scrape_seed_list(creators: list, tag: str = "SEED"):
     """Scrape a list of seed creators, ensuring each has a profile row."""
     for i, c in enumerate(creators):
         if not running:
             break
+
+        # Yield to any user-triggered tracks before continuing the seed batch.
+        drain_scrape_queue()
+
         username = c["username"]
         platform = c["platform"]
 
@@ -158,6 +193,17 @@ def run_daemon():
     PID_FILE.write_text(str(os.getpid()))
     log.info(f"Daemon started (PID {os.getpid()})")
 
+    init_sentry()
+
+    # Reclaim any queue rows left 'in_progress' by a previous crash.
+    try:
+        reclaimed = reclaim_stale_queue_entries()
+        if reclaimed:
+            log.info(f"[STARTUP] Reclaimed {reclaimed} stale queue entries")
+    except Exception as e:
+        log.error(f"[STARTUP] Queue reclaim error: {e}")
+        capture_exception(e)
+
     # Backfill hook patterns on startup (idempotent)
     try:
         linked = backfill_hook_patterns()
@@ -166,6 +212,8 @@ def run_daemon():
         log.error(f"[STARTUP] Hook patterns backfill error: {e}")
 
     last_refresh = 0
+    # Per-profile consecutive-failure tracking for exponential backoff (in-memory).
+    scrape_failures: dict = {}
 
     # Track which scheduled jobs have run today
     last_daily_top50 = None       # Daily at midnight EST
@@ -182,7 +230,14 @@ def run_daemon():
             weekday = est_now.weekday()  # 0=Monday, 6=Sunday
 
             # --- Fast path: on-demand scrape queue (checked every loop) ---
-            queued = pop_scrape_queue()
+            try:
+                queued = pop_scrape_queue()
+            except Exception as e:
+                # A transient DB error here used to crash the whole daemon.
+                log.error(f"[QUEUE] Failed to read scrape queue: {e}")
+                capture_exception(e)
+                time.sleep(5)
+                continue
             if queued:
                 queue_id, username, platform = queued
                 log.info(f"[QUEUE] Scraping {platform}/@{username} (queue #{queue_id})")
@@ -211,11 +266,15 @@ def run_daemon():
                     log.info(f"[ANALYZE] Fast-path: post {post['id']} by @{post.get('username', '?')} (viral: {post.get('viral_score', 0):.1f}x)")
                     if analyze_post(post):
                         log.info(f"[ANALYZE] Done: post {post['id']}")
-                    else:
-                        log.warning(f"[ANALYZE] Failed: post {post['id']}")
-                    continue  # Check for more pending immediately
+                        continue  # Success — check for more pending immediately
+                    # Failure is recorded by analyze_post (failure marker), so the
+                    # same post will not be re-selected. Fall through to the normal
+                    # sleep instead of tight-looping (the old `continue` here caused
+                    # a zero-delay livelock when a post failed deterministically).
+                    log.warning(f"[ANALYZE] Failed: post {post['id']} (recorded; not retrying immediately)")
             except Exception as e:
                 log.error(f"[ANALYZE] Fast-path error: {e}")
+                capture_exception(e)
 
             # --- Scheduled: Daily top-50 seed scrape at midnight EST ---
             if hour == 0 and last_daily_top50 != today:
@@ -262,7 +321,19 @@ def run_daemon():
 
             # --- Slow path: refresh stale user-tracked profiles (every 60s) ---
             if time.time() - last_refresh > 60:
-                all_profiles = get_active_profiles()
+                # Liveness heartbeat + periodic stuck-queue recovery.
+                try:
+                    record_heartbeat(WORKER_ID)
+                    reclaim_stale_queue_entries()
+                except Exception as e:
+                    log.error(f"Heartbeat/reclaim error: {e}")
+                    capture_exception(e)
+                try:
+                    all_profiles = get_active_profiles()
+                except Exception as e:
+                    log.error(f"Failed to fetch active profiles: {e}")
+                    capture_exception(e)
+                    all_profiles = []
                 if all_profiles:
                     cutoff = datetime.utcnow() - timedelta(seconds=REFRESH_INTERVAL)
 
@@ -284,18 +355,27 @@ def run_daemon():
                         for username, platform in stale:
                             if not running:
                                 break
+                            # Skip profiles in exponential backoff after repeated failures.
+                            key = (username, platform)
+                            fstate = scrape_failures.get(key, {"failures": 0, "last": 0.0})
+                            if not should_attempt(fstate["failures"], fstate["last"], time.time()):
+                                continue
                             log.info(f"Scraping {platform}/@{username}")
                             try:
                                 ok = scrape_one(username, platform)
                                 log.info(f"{'done' if ok else 'error'} {platform}/@{username}")
                                 if ok:
+                                    scrape_failures.pop(key, None)
                                     try:
                                         n = generate_viral_post_notifications(username, platform)
                                         if n:
                                             log.info(f"[NOTIFY] Sent {n} viral post notifications for @{username}")
                                     except Exception as e:
                                         log.error(f"[NOTIFY] Error generating notifications: {e}")
+                                else:
+                                    scrape_failures[key] = {"failures": fstate["failures"] + 1, "last": time.time()}
                             except Exception as e:
+                                scrape_failures[key] = {"failures": fstate["failures"] + 1, "last": time.time()}
                                 log.error(f"Error scraping {platform}/@{username}: {e}")
 
                             delay = RATE_LIMITS.get(platform, 60) + random.uniform(0, 15)

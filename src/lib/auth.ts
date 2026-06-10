@@ -3,6 +3,8 @@ import TikTok from 'next-auth/providers/tiktok';
 import Credentials from 'next-auth/providers/credentials';
 import bcrypt from 'bcryptjs';
 import { getPool } from './db';
+import { normalizeEmail } from './auth-validation';
+import { rateLimit } from './rate-limit';
 
 export const { handlers, signIn, signOut, auth } = NextAuth({
   trustHost: true,
@@ -17,45 +19,47 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
       async authorize(credentials) {
         try {
           if (!credentials?.email || !credentials?.password) {
-            console.log('[auth] Missing email or password');
+            return null;
+          }
+
+          // Normalize so case/whitespace variants resolve to the same account.
+          const email = normalizeEmail(String(credentials.email));
+
+          // Throttle brute-force / credential-stuffing per email.
+          if (!rateLimit(`login:${email}`, 10, 15 * 60 * 1000).allowed) {
             return null;
           }
 
           const pool = getPool();
           const { rows: [user] } = await pool.query(
             'SELECT id, email, password_hash, username, display_name FROM users WHERE email = $1',
-            [credentials.email]
+            [email]
           );
 
-          if (!user) {
-            console.log('[auth] No user found for email:', credentials.email);
-            return null;
-          }
-          if (!user.password_hash) {
-            console.log('[auth] User has no password_hash (OAuth-only account):', credentials.email);
+          // Same null result for every failure mode — no account enumeration,
+          // no PII in logs.
+          if (!user || !user.password_hash) {
             return null;
           }
 
           const valid = await bcrypt.compare(credentials.password as string, user.password_hash);
           if (!valid) {
-            console.log('[auth] Password mismatch for:', credentials.email);
             return null;
           }
 
-          console.log('[auth] Login success for user:', user.id);
           return {
             id: String(user.id),
             email: user.email,
             name: user.display_name || user.username || user.email,
           };
-        } catch (err) {
-          console.error('[auth] authorize error:', err);
+        } catch {
+          console.error('[auth] authorize error');
           return null;
         }
       },
     }),
   ],
-  session: { strategy: 'jwt' },
+  session: { strategy: 'jwt', maxAge: 60 * 60 * 24 * 30 }, // 30-day bounded session lifetime
   pages: {
     signIn: '/login',
   },

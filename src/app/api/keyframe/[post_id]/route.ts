@@ -1,10 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getPool } from '@/lib/db';
+import { getUserId, unauthorized } from '@/lib/api-auth';
 
 export async function GET(
   _request: NextRequest,
   { params }: { params: { post_id: string } }
 ) {
+  if ((await getUserId()) === null) return unauthorized();
   const postId = parseInt(params.post_id, 10);
   if (isNaN(postId)) {
     return NextResponse.json({ error: 'Invalid post_id' }, { status: 400 });

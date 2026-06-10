@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import bcrypt from 'bcryptjs';
 import { getPool } from '@/lib/db';
+import { passwordError } from '@/lib/auth-validation';
 
 export async function POST(request: Request) {
   const session = await auth();
@@ -11,8 +12,9 @@ export async function POST(request: Request) {
 
   const { currentPassword, newPassword } = await request.json();
 
-  if (!newPassword || newPassword.length < 8) {
-    return NextResponse.json({ error: 'New password must be at least 8 characters' }, { status: 400 });
+  const pwError = passwordError(String(newPassword || ''));
+  if (pwError) {
+    return NextResponse.json({ error: pwError }, { status: 400 });
   }
 
   const pool = getPool();

@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import { getPool } from '@/lib/db';
+import { enforceRateLimitFor } from '@/lib/rate-limit';
+import { fetchWithTimeout } from '@/lib/llm';
+
+export const maxDuration = 60;
 
 export async function POST(request: NextRequest) {
   const session = await auth();
@@ -9,6 +13,9 @@ export async function POST(request: NextRequest) {
   }
 
   const userId = Number(session.user.id);
+  const limited = enforceRateLimitFor(`remix:${userId}`, 20, 60_000);
+  if (limited) return limited;
+
   const body = await request.json();
   const { pattern_id } = body;
 
@@ -113,7 +120,7 @@ ADAPT FOR THIS CREATOR:
 ${bgQA ? `\nBACKGROUND:\n${bgQA}` : ''}`;
 
   try {
-    const resp = await fetch('https://api.deepseek.com/chat/completions', {
+    const resp = await fetchWithTimeout('https://api.deepseek.com/chat/completions', {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${apiKey}`,
@@ -127,7 +134,7 @@ ${bgQA ? `\nBACKGROUND:\n${bgQA}` : ''}`;
         ],
         response_format: { type: 'json_object' },
       }),
-    });
+    }, 30_000);
 
     if (!resp.ok) {
       const errText = await resp.text();

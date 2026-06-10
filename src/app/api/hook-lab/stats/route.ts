@@ -1,9 +1,11 @@
 import { NextResponse } from 'next/server';
 import { getPool } from '@/lib/db';
+import { getUserId, unauthorized } from '@/lib/api-auth';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET() {
+  if ((await getUserId()) === null) return unauthorized();
   try {
     const pool = getPool();
 

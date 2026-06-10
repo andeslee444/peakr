@@ -181,7 +181,7 @@ export async function GET(request: NextRequest) {
 
     // Fetch example thumbnails for each pattern (up to 5)
     const patternIds = hooks.map(h => h.pattern_id);
-    let exampleThumbnails: Record<number, Array<{ post_id: number; thumbnail_url: string | null; s3_thumbnail_url: string | null }>> = {};
+    const exampleThumbnails: Record<number, Array<{ post_id: number; thumbnail_url: string | null; s3_thumbnail_url: string | null }>> = {};
 
     if (patternIds.length > 0) {
       const { rows: examples } = await pool.query(`

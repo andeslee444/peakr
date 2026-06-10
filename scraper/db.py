@@ -8,6 +8,8 @@ import psycopg2.extras
 from datetime import datetime
 from typing import Optional
 
+from scraper.analysis_state import MAX_ANALYSIS_ATTEMPTS, failure_marker
+
 DATABASE_URL = os.environ.get('DATABASE_URL', '')
 
 SCHEMA = """
@@ -30,9 +32,9 @@ CREATE TABLE IF NOT EXISTS profiles (
   display_name TEXT,
   bio TEXT,
   avatar_url TEXT,
-  followers INTEGER DEFAULT 0,
-  following INTEGER DEFAULT 0,
-  total_likes INTEGER DEFAULT 0,
+  followers BIGINT DEFAULT 0,
+  following BIGINT DEFAULT 0,
+  total_likes BIGINT DEFAULT 0,
   post_count INTEGER DEFAULT 0,
   avg_views REAL DEFAULT 0,
   last_scraped_at TIMESTAMPTZ,
@@ -47,10 +49,10 @@ CREATE TABLE IF NOT EXISTS posts (
   post_url TEXT,
   thumbnail_url TEXT,
   description TEXT,
-  views INTEGER DEFAULT 0,
-  likes INTEGER DEFAULT 0,
-  comments INTEGER DEFAULT 0,
-  shares INTEGER DEFAULT 0,
+  views BIGINT DEFAULT 0,
+  likes BIGINT DEFAULT 0,
+  comments BIGINT DEFAULT 0,
+  shares BIGINT DEFAULT 0,
   duration_seconds INTEGER,
   is_video BOOLEAN DEFAULT FALSE,
   viral_score REAL DEFAULT 0,
@@ -75,10 +77,12 @@ CREATE TABLE IF NOT EXISTS scrape_log (
 
 CREATE TABLE IF NOT EXISTS saved_posts (
   id SERIAL PRIMARY KEY,
-  post_id INTEGER UNIQUE REFERENCES posts(id),
+  user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+  post_id INTEGER REFERENCES posts(id),
   folder TEXT DEFAULT 'default',
   notes TEXT,
-  saved_at TIMESTAMPTZ DEFAULT NOW()
+  saved_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(user_id, post_id)
 );
 
 CREATE TABLE IF NOT EXISTS scrape_queue (
@@ -88,6 +92,12 @@ CREATE TABLE IF NOT EXISTS scrape_queue (
   created_at TIMESTAMPTZ DEFAULT NOW(),
   started_at TIMESTAMPTZ,
   completed_at TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS worker_heartbeats (
+  worker_id TEXT PRIMARY KEY,
+  last_heartbeat_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  status TEXT
 );
 
 CREATE TABLE IF NOT EXISTS seed_creators (
@@ -407,6 +417,42 @@ def migrate_audio_columns():
     conn.close()
 
 
+def migrate_bignum_columns():
+    """Widen engagement counters to BIGINT for existing databases.
+
+    Mega-creators have view/like totals beyond 32-bit INTEGER range (>2.1B),
+    which would otherwise raise 'integer out of range' on insert.
+    """
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        ALTER TABLE posts ALTER COLUMN views TYPE BIGINT;
+        ALTER TABLE posts ALTER COLUMN likes TYPE BIGINT;
+        ALTER TABLE posts ALTER COLUMN comments TYPE BIGINT;
+        ALTER TABLE posts ALTER COLUMN shares TYPE BIGINT;
+        ALTER TABLE profiles ALTER COLUMN followers TYPE BIGINT;
+        ALTER TABLE profiles ALTER COLUMN following TYPE BIGINT;
+        ALTER TABLE profiles ALTER COLUMN total_likes TYPE BIGINT;
+    """)
+    conn.commit()
+    cur.close()
+    conn.close()
+
+
+def migrate_indexes():
+    """Indexes for hot list/sort paths (idempotent)."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_posts_profile_id ON posts(profile_id);
+        CREATE INDEX IF NOT EXISTS idx_posts_viral_score ON posts(viral_score DESC);
+        CREATE INDEX IF NOT EXISTS idx_posts_posted_at ON posts(posted_at DESC);
+    """)
+    conn.commit()
+    cur.close()
+    conn.close()
+
+
 def migrate_hook_columns():
     """Add hook analysis columns to existing posts table."""
     conn = get_conn()
@@ -453,10 +499,12 @@ def get_unanalyzed_viral_posts(threshold: float = 1.5, limit: int = 10) -> list[
          FROM posts p JOIN profiles pr ON p.profile_id = pr.id
          WHERE p.viral_score >= %s AND p.analyzed_at IS NULL
                AND (p.hook_analysis IS NULL OR p.hook_analysis != '{"status": "pending"}')
+               AND (p.hook_analysis->>'status' IS DISTINCT FROM 'failed'
+                    OR COALESCE((p.hook_analysis->>'attempts')::int, 0) < %s)
          ORDER BY p.viral_score DESC LIMIT %s)
         ORDER BY priority, viral_score DESC
         LIMIT %s
-    """, (limit, threshold, limit, limit))
+    """, (limit, threshold, MAX_ANALYSIS_ATTEMPTS, limit, limit))
     rows = cur.fetchall()
     cur.close()
     conn.close()
@@ -524,6 +572,24 @@ def save_hook_analysis(post_id: int, transcript: str, hook_analysis_dict: dict,
     conn.close()
 
 
+def mark_analysis_failed(post_id: int, attempts: int, reason: str = ""):
+    """Record a failed analysis attempt so the post is not retried forever.
+
+    Writes a ``{"status":"failed","attempts":N,...}`` marker. Once attempts reach
+    MAX_ANALYSIS_ATTEMPTS, get_unanalyzed_viral_posts stops selecting the post,
+    which prevents a single bad post from starving the daemon loop.
+    """
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE posts SET hook_analysis = %s WHERE id = %s",
+        (json.dumps(failure_marker(attempts, reason)), post_id),
+    )
+    conn.commit()
+    cur.close()
+    conn.close()
+
+
 def pop_scrape_queue() -> Optional[tuple]:
     """Atomically claim the next pending queue entry.
     Returns (queue_id, username, platform) or None.
@@ -553,6 +619,38 @@ def pop_scrape_queue() -> Optional[tuple]:
     if not profile:
         return None
     return (queue_id, profile['username'], profile['platform'])
+
+
+def reclaim_stale_queue_entries(max_age_minutes: int = 15) -> int:
+    """Reset queue rows stuck 'in_progress' (daemon crashed mid-scrape) back to
+    'pending' so the profile can be scraped again. Returns rows reclaimed."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        """UPDATE scrape_queue SET status='pending', started_at=NULL
+           WHERE status='in_progress' AND started_at < NOW() - make_interval(mins => %s)""",
+        (max_age_minutes,),
+    )
+    n = cur.rowcount
+    conn.commit()
+    cur.close()
+    conn.close()
+    return n
+
+
+def record_heartbeat(worker_id: str, status: str = 'ok') -> None:
+    """Upsert the daemon's liveness heartbeat (read by /api/worker-status)."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        """INSERT INTO worker_heartbeats (worker_id, last_heartbeat_at, status)
+           VALUES (%s, NOW(), %s)
+           ON CONFLICT (worker_id) DO UPDATE SET last_heartbeat_at = NOW(), status = EXCLUDED.status""",
+        (worker_id, status),
+    )
+    conn.commit()
+    cur.close()
+    conn.close()
 
 
 def complete_scrape_queue(queue_id: int, status: str = 'done'):
@@ -863,21 +961,20 @@ def generate_viral_post_notifications(username: str, platform: str, threshold: f
         views = post['views'] or 0
         title = f"@{username} just posted a {score:.1f}x viral post!"
         body = f"A new post with {views:,} views is performing {score:.1f}x above their average."
-        link = f"/dashboard/hook-lab"
+        # The link carries the stable post id so dedup keys on the POST, not on the
+        # ever-changing view count (which previously re-fired on every re-scrape).
+        link = f"/dashboard/hook-lab?post={post['id']}"
 
         for u in tracking_users:
-            # Avoid duplicate notifications for the same post
             cur2.execute("""
                 INSERT INTO notifications (user_id, type, title, body, link)
                 SELECT %s, %s, %s, %s, %s
                 WHERE NOT EXISTS (
                     SELECT 1 FROM notifications
-                    WHERE user_id = %s AND type = 'viral_post'
-                      AND body LIKE %s
-                      AND created_at > NOW() - INTERVAL '24 hours'
+                    WHERE user_id = %s AND type = 'viral_post' AND link = %s
                 )
             """, (u['user_id'], 'viral_post', title, body, link,
-                  u['user_id'], f'%post with {views:,} views%'))
+                  u['user_id'], link))
             notif_count += cur2.rowcount
 
     conn.commit()
@@ -887,7 +984,12 @@ def generate_viral_post_notifications(username: str, platform: str, threshold: f
     return notif_count
 
 
-# Initialize on import
-init_db()
-migrate_hook_columns()
-migrate_audio_columns()
+# Initialize on import (only when a database is configured). Skipping when
+# DATABASE_URL is unset keeps the module importable in tests/CI without a DB and
+# avoids an import-time connection failure.
+if DATABASE_URL:
+    init_db()
+    migrate_hook_columns()
+    migrate_audio_columns()
+    migrate_bignum_columns()
+    migrate_indexes()

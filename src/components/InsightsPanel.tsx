@@ -222,7 +222,7 @@ export default function InsightsPanel({ post, open, onClose, onPostUpdate, isSav
             {status === 'queued' && (
               <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-center">
                 <p className="text-sm text-amber-700 font-medium">Queued for analysis</p>
-                <p className="text-xs text-amber-600 mt-1">The Mac Mini will process this shortly. Check back soon.</p>
+                <p className="text-xs text-amber-600 mt-1">We&apos;re analyzing this now. Check back in a few minutes.</p>
               </div>
             )}
 

@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import { getPool } from '@/lib/db';
+import { enforceRateLimitFor } from '@/lib/rate-limit';
+import { fetchWithTimeout } from '@/lib/llm';
 import type { CreatorSuggestion, SuggestionHook } from '@/lib/types';
+
+export const maxDuration = 60;
 
 const ADJACENT: Record<string, string[]> = {
   fitness: ['health', 'lifestyle', 'motivation'],
@@ -26,6 +30,8 @@ export async function POST(request: NextRequest) {
   if (!session?.user?.id) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
+  const limited = enforceRateLimitFor(`suggestions:${session.user.id}`, 15, 60_000);
+  if (limited) return limited;
 
   const body = await request.json();
   const { niche, content_style, target_audience, unique_angle, content_topics } = body;
@@ -136,7 +142,7 @@ Pick the 5-8 best matches for this user. For each, write 2-3 sentences explainin
 Return ONLY a JSON array: [{ "username": "...", "platform": "...", "why_text": "..." }]`;
 
     try {
-      const resp = await fetch('https://api.deepseek.com/chat/completions', {
+      const resp = await fetchWithTimeout('https://api.deepseek.com/chat/completions', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${apiKey}`,
@@ -148,7 +154,7 @@ Return ONLY a JSON array: [{ "username": "...", "platform": "...", "why_text": "
           max_tokens: 1024,
           temperature: 0.7,
         }),
-      });
+      }, 30_000);
 
       if (resp.ok) {
         const data = await resp.json();

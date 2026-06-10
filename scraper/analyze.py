@@ -16,9 +16,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from scraper.db import get_unanalyzed_viral_posts, save_hook_analysis
+from scraper.db import get_unanalyzed_viral_posts, save_hook_analysis, mark_analysis_failed
 from scraper.transcribe import download_video, extract_audio, extract_keyframes, transcribe_audio
 from scraper.hooks import analyze_hook
+from scraper.analysis_state import skip_reason, parse_attempts, MAX_ANALYSIS_ATTEMPTS
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("peakr-analyze")
@@ -28,19 +29,23 @@ MAX_PER_ACCOUNT = 20
 
 
 def analyze_post(post: dict) -> bool:
-    """Analyze a single post's hook. Returns True on success."""
+    """Analyze a single post's hook. Returns True on success.
+
+    On failure, records a failure marker (terminal for deterministic skips,
+    attempt-incrementing otherwise) so a permanently-failing post can never
+    starve the daemon loop.
+    """
     post_id = post["id"]
     post_url = post.get("post_url", "")
     username = post.get("username", "unknown")
     duration = post.get("duration_seconds") or 0
+    prior_attempts = parse_attempts(post.get("hook_analysis"))
 
-    if not post_url:
-        log.warning(f"Post {post_id} has no URL, skipping")
-        return False
-
-    # Cost control: skip very long videos
-    if duration > 300:
-        log.info(f"Post {post_id} is {duration}s (>5min), skipping")
+    # Deterministic failures can never succeed — mark terminal immediately.
+    reason = skip_reason(post)
+    if reason:
+        log.info(f"Post {post_id} unanalyzable ({reason}); marking terminal")
+        mark_analysis_failed(post_id, MAX_ANALYSIS_ATTEMPTS, reason)
         return False
 
     tmpdir = tempfile.mkdtemp(prefix="peakr-analyze-")
@@ -93,7 +98,9 @@ def analyze_post(post: dict) -> bool:
         )
 
         if not analysis:
-            log.error(f"Hook analysis failed for post {post_id}")
+            attempts = prior_attempts + 1
+            log.error(f"Hook analysis failed for post {post_id} (attempt {attempts}/{MAX_ANALYSIS_ATTEMPTS})")
+            mark_analysis_failed(post_id, attempts, "analysis_empty")
             return False
 
         # 7. Save to DB
@@ -102,7 +109,9 @@ def analyze_post(post: dict) -> bool:
         return True
 
     except Exception as e:
-        log.error(f"Error analyzing post {post_id}: {e}")
+        attempts = prior_attempts + 1
+        log.error(f"Error analyzing post {post_id} (attempt {attempts}/{MAX_ANALYSIS_ATTEMPTS}): {e}")
+        mark_analysis_failed(post_id, attempts, "exception")
         return False
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)

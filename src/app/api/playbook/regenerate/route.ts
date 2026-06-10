@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import { getPool } from '@/lib/db';
+import { enforceRateLimitFor } from '@/lib/rate-limit';
+import { fetchWithTimeout } from '@/lib/llm';
+import { validatePlaybookSection } from '@/lib/playbook-schema';
+
+export const maxDuration = 60;
 
 export async function POST(request: NextRequest) {
   const session = await auth();
@@ -9,6 +14,9 @@ export async function POST(request: NextRequest) {
   }
 
   const userId = Number(session.user.id);
+  const limited = enforceRateLimitFor(`regenerate:${userId}`, 15, 60_000);
+  if (limited) return limited;
+
   const body = await request.json();
   const { hook_type, niche, section_id } = body;
 
@@ -144,7 +152,7 @@ SAVED HOOKS (${sectionLabel}):
 ${hookExamples}`;
 
   try {
-    const resp = await fetch('https://api.deepseek.com/chat/completions', {
+    const resp = await fetchWithTimeout('https://api.deepseek.com/chat/completions', {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${apiKey}`,
@@ -158,7 +166,7 @@ ${hookExamples}`;
         ],
         response_format: { type: 'json_object' },
       }),
-    });
+    }, 30_000);
 
     if (!resp.ok) {
       const errText = await resp.text();
@@ -168,7 +176,16 @@ ${hookExamples}`;
 
     const data = await resp.json();
     const text = data.choices[0].message.content.trim();
-    const generated = JSON.parse(text);
+    // Validate the model output before persisting — a wrong shape must not null
+    // out the user's saved section.
+    const generated = validatePlaybookSection(JSON.parse(text));
+    if (!generated) {
+      console.error('DeepSeek returned malformed playbook JSON');
+      return NextResponse.json(
+        { error: 'AI returned an unexpected response. Please try again.' },
+        { status: 502 }
+      );
+    }
     const sourcePostIds = savedHooks.map((h: { id: number }) => h.id);
 
     // Upsert the playbook section
