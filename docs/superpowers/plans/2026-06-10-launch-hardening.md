@@ -45,21 +45,18 @@ infra leak.
 fixed (lint passes); Terms/Privacy pages; account deletion (GDPR); README rewrite;
 hot-query indexes; pool sizing; track-avatar validation.
 
-**Gate status:** 77 Vitest + 31 pytest pass; `tsc --noEmit` clean; `npm run lint`
-0 errors; `npm run build` succeeds (53 routes).
+**✅ Previously-deferred items — now DONE.**
+- **4.4 IG proxy** — BrowserSession routes IG through the WARP proxy when running;
+  `IG_PROXY_REQUIRED=1` refuses to scrape from the raw IP when it's down.
+- **4.6 backoff + seed yield** — per-profile exponential backoff; seed batches drain
+  the on-demand queue between creators.
+- **6.2 error-vs-empty** — Hook Lab distinguishes load error from empty (retry UI);
+  tracked search shows external-lookup failures.
+- **7.10 search-accounts** — lookup helpers throw on real failure; route returns
+  `externalOk`; track UI shows a "couldn't reach {platform}" notice.
 
-**Deferred (need live/operator involvement or low ROI vs risk):**
-- **4.4 IG proxy enforcement** — routing IG headless Chromium + yt-dlp through a
-  proxy needs the proxy config + live IG testing; changing fragile scraper
-  internals blind risks breaking the working scraper. Operator task.
-- **6.2 broad error-vs-empty states** — several dashboard fetch handlers still show
-  empty states on error; the highest-impact lies (stalled pipeline) are now
-  surfaced via the banner. Remaining is per-page polish.
-- **7.10 search-accounts silent external-lookup failure** — surfacing requires
-  refactoring the error-swallowing external-lookup helpers; search still degrades
-  to local results today.
-- **4.6 retry/backoff for persistently-failing profiles + seed-batch yields** —
-  analysis retries are now capped (Wave 1.3); profile-scrape backoff remains.
+**Gate status (final):** 79 Vitest + 38 pytest pass; `tsc --noEmit` clean;
+`npm run lint` 0 errors; `npm run build` succeeds (53 routes). All waves complete.
 
 ---
 
