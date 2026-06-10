@@ -77,10 +77,12 @@ CREATE TABLE IF NOT EXISTS scrape_log (
 
 CREATE TABLE IF NOT EXISTS saved_posts (
   id SERIAL PRIMARY KEY,
-  post_id INTEGER UNIQUE REFERENCES posts(id),
+  user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+  post_id INTEGER REFERENCES posts(id),
   folder TEXT DEFAULT 'default',
   notes TEXT,
-  saved_at TIMESTAMPTZ DEFAULT NOW()
+  saved_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(user_id, post_id)
 );
 
 CREATE TABLE IF NOT EXISTS scrape_queue (

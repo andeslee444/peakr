@@ -18,7 +18,10 @@ interface OEmbedResponse {
 export async function POST(request: NextRequest) {
   try {
     const session = await auth();
-    const userId = session?.user?.id ? Number(session.user.id) : null;
+    if (!session?.user?.id) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    const userId = Number(session.user.id);
 
     const body = await request.json();
     const { url, folder = 'default' } = body;
@@ -143,10 +146,10 @@ export async function POST(request: NextRequest) {
         [profile.id, platformId, postUrl, thumbnailUrl, description],
       );
 
-      // Check for duplicate saved_post
+      // Check for duplicate saved_post (scoped to this user)
       const { rows: existing } = await client.query(
-        'SELECT id FROM saved_posts WHERE post_id = $1 AND folder = $2',
-        [post.id, folder],
+        'SELECT id FROM saved_posts WHERE user_id = $1 AND post_id = $2',
+        [userId, post.id],
       );
 
       if (existing.length > 0) {
@@ -160,8 +163,8 @@ export async function POST(request: NextRequest) {
       }
 
       const { rows: [saved] } = await client.query(
-        'INSERT INTO saved_posts (post_id, folder) VALUES ($1, $2) RETURNING id',
-        [post.id, folder],
+        'INSERT INTO saved_posts (user_id, post_id, folder) VALUES ($1, $2, $3) RETURNING id',
+        [userId, post.id, folder],
       );
 
       // Also save to hook_patterns + user_saved_patterns if user is logged in

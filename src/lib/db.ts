@@ -91,10 +91,12 @@ async function initSchema() {
 
     CREATE TABLE IF NOT EXISTS saved_posts (
       id SERIAL PRIMARY KEY,
-      post_id INTEGER UNIQUE REFERENCES posts(id),
+      user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      post_id INTEGER REFERENCES posts(id),
       folder TEXT DEFAULT 'default',
       notes TEXT,
-      saved_at TIMESTAMPTZ DEFAULT NOW()
+      saved_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(user_id, post_id)
     );
 
     CREATE TABLE IF NOT EXISTS scrape_queue (
@@ -311,13 +313,13 @@ async function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_notifications_user_id ON notifications(user_id);
     CREATE INDEX IF NOT EXISTS idx_notifications_created_at ON notifications(created_at DESC);
   `);
-  // Deduplicate saved_posts and add unique constraint if missing
+  // saved_posts is now per-user: add user_id, drop the old global (post_id)
+  // uniqueness, and key uniqueness on (user_id, post_id).
   await pool.query(`
-    DELETE FROM saved_posts a USING saved_posts b
-    WHERE a.id > b.id AND a.post_id = b.post_id;
-  `);
-  await pool.query(`
-    CREATE UNIQUE INDEX IF NOT EXISTS saved_posts_post_id_key ON saved_posts(post_id);
+    ALTER TABLE saved_posts ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id) ON DELETE CASCADE;
+    DROP INDEX IF EXISTS saved_posts_post_id_key;
+    ALTER TABLE saved_posts DROP CONSTRAINT IF EXISTS saved_posts_post_id_key;
+    CREATE UNIQUE INDEX IF NOT EXISTS saved_posts_user_post_key ON saved_posts(user_id, post_id);
   `);
   // Unique constraint for playbook upsert by user + hook_type + niche
   await pool.query(`

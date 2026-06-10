@@ -1,7 +1,10 @@
 import { NextResponse } from 'next/server';
 import { getPool } from '@/lib/db';
+import { getUserId, unauthorized } from '@/lib/api-auth';
 
 export async function GET(request: Request) {
+  const userId = await getUserId();
+  if (userId === null) return unauthorized();
   try {
     const { searchParams } = new URL(request.url);
     const folder = searchParams.get('folder');
@@ -15,16 +18,20 @@ export async function GET(request: Request) {
       FROM saved_posts sp
       JOIN posts p ON sp.post_id = p.id
       JOIN profiles pr ON p.profile_id = pr.id
+      WHERE sp.user_id = $1
     `;
-    const params: string[] = [];
+    const params: Array<string | number> = [userId];
     if (folder && folder !== 'All') {
-      query += ' WHERE sp.folder = $1';
+      query += ' AND sp.folder = $2';
       params.push(folder);
     }
     query += ' ORDER BY sp.saved_at DESC';
 
     const { rows: saved } = await pool.query(query, params);
-    const { rows: folderRows } = await pool.query('SELECT DISTINCT folder FROM saved_posts ORDER BY folder');
+    const { rows: folderRows } = await pool.query(
+      'SELECT DISTINCT folder FROM saved_posts WHERE user_id = $1 ORDER BY folder',
+      [userId]
+    );
 
     return NextResponse.json({ saved, folders: folderRows.map((f: { folder: string }) => f.folder) });
   } catch {
@@ -33,6 +40,8 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
+  const userId = await getUserId();
+  if (userId === null) return unauthorized();
   try {
     const body = await request.json();
     const { post_id, folder = 'default', notes = '' } = body;
@@ -43,10 +52,10 @@ export async function POST(request: Request) {
 
     const pool = getPool();
     const { rows: [row] } = await pool.query(
-      `INSERT INTO saved_posts (post_id, folder, notes) VALUES ($1, $2, $3)
-       ON CONFLICT (post_id) DO UPDATE SET folder = EXCLUDED.folder, notes = EXCLUDED.notes
+      `INSERT INTO saved_posts (user_id, post_id, folder, notes) VALUES ($1, $2, $3, $4)
+       ON CONFLICT (user_id, post_id) DO UPDATE SET folder = EXCLUDED.folder, notes = EXCLUDED.notes
        RETURNING id`,
-      [post_id, folder, notes]
+      [userId, post_id, folder, notes]
     );
 
     return NextResponse.json({ id: row.id });
@@ -56,13 +65,15 @@ export async function POST(request: Request) {
 }
 
 export async function DELETE(request: Request) {
+  const userId = await getUserId();
+  if (userId === null) return unauthorized();
   try {
     const { post_id } = await request.json();
     if (!post_id) {
       return NextResponse.json({ error: 'post_id required' }, { status: 400 });
     }
     const pool = getPool();
-    await pool.query('DELETE FROM saved_posts WHERE post_id = $1', [post_id]);
+    await pool.query('DELETE FROM saved_posts WHERE post_id = $1 AND user_id = $2', [post_id, userId]);
     return NextResponse.json({ ok: true });
   } catch {
     return NextResponse.json({ error: 'Failed to unsave post' }, { status: 500 });
