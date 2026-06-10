@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import bcrypt from 'bcryptjs';
 import { getPool } from '@/lib/db';
+import { normalizeEmail, isValidEmail, passwordError } from '@/lib/auth-validation';
 
 export async function POST(request: Request) {
   const { email, password, name } = await request.json();
@@ -9,16 +10,22 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Email and password are required' }, { status: 400 });
   }
 
-  if (password.length < 8) {
-    return NextResponse.json({ error: 'Password must be at least 8 characters' }, { status: 400 });
+  const normalized = normalizeEmail(String(email));
+  if (!isValidEmail(normalized)) {
+    return NextResponse.json({ error: 'Please enter a valid email address' }, { status: 400 });
+  }
+
+  const pwError = passwordError(String(password));
+  if (pwError) {
+    return NextResponse.json({ error: pwError }, { status: 400 });
   }
 
   const pool = getPool();
 
-  // Check if email already exists
+  // Check if email already exists (normalized, case-insensitive)
   const { rows: existing } = await pool.query(
     'SELECT id FROM users WHERE email = $1',
-    [email]
+    [normalized]
   );
 
   if (existing.length > 0) {
@@ -30,7 +37,7 @@ export async function POST(request: Request) {
   await pool.query(
     `INSERT INTO users (email, password_hash, display_name, last_login_at)
      VALUES ($1, $2, $3, NOW())`,
-    [email, passwordHash, name || null]
+    [normalized, passwordHash, name || null]
   );
 
   return NextResponse.json({ success: true });
