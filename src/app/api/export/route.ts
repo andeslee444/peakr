@@ -1,24 +1,30 @@
 import { NextResponse } from 'next/server';
 import { getPool } from '@/lib/db';
+import { getUserId, unauthorized } from '@/lib/api-auth';
 
 interface ExportRow {
   [key: string]: string | number | null;
 }
 
 export async function GET(request: Request) {
+  const userId = await getUserId();
+  if (userId === null) return unauthorized();
   try {
     const { searchParams } = new URL(request.url);
     const format = searchParams.get('format') || 'csv';
 
     const pool = getPool();
+    // Scope the export to the profiles this user actually tracks.
     const { rows } = await pool.query(`
       SELECT pr.username, pr.platform, pr.followers, pr.following,
              p.description, p.views, p.likes, p.comments, p.shares,
              p.viral_score, p.post_url, p.posted_at, p.thumbnail_url
       FROM posts p
       JOIN profiles pr ON p.profile_id = pr.id
+      JOIN user_tracked_profiles utp ON utp.profile_id = pr.id
+      WHERE utp.user_id = $1
       ORDER BY p.viral_score DESC
-    `) as { rows: ExportRow[] };
+    `, [userId]) as { rows: ExportRow[] };
 
     if (format === 'csv') {
       const headers = ['username', 'platform', 'followers', 'following', 'description', 'views', 'likes', 'comments', 'shares', 'viral_score', 'post_url', 'posted_at'];

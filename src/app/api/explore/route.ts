@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getPool } from '@/lib/db';
+import { getUserId, unauthorized } from '@/lib/api-auth';
 
 export async function GET(request: NextRequest) {
+  if ((await getUserId()) === null) return unauthorized();
   try {
     const { searchParams } = new URL(request.url);
     const sort = searchParams.get('sort') || 'viral_score';
