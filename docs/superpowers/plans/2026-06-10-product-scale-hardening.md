@@ -66,7 +66,7 @@
 - [x] **7.5 Onboarding gate on JWT value**.
 - [x] **7.6 CI gate (vitest+pytest on push) + pre-restart smoke gate + rollback**.
 
-## Wave 8 — Throughput + remaining product
+## Wave 8 — Throughput + remaining product ✅ DONE
 
 - [x] **8.1 Scrape-debt metric + Sentry paging** (get_scrape_debt + daemon alert). Prereqs done: SKIP LOCKED [5.1] + connection pool [6.6]. **Remaining (ops, needs Mini runtime):** spawn 3-5 worker processes claiming via the now-concurrency-safe queue + route the 4h refresh through it.
 - [x] **8.2 `WHISPER_MODE=api` path**.
@@ -74,7 +74,7 @@
 - [x] **8.4 a11y pass (labels, focus trap, keyboard)**.
 - [x] **8.5 Land-in-Hook-Lab onboarding**.
 - [x] **8.6 Hook Lab empty-state CTA / clear-niche**.
-- [ ] **8.7 Value loop: track own handle + weekly digest**.
+- [x] **8.7 Value loop: in-app niche digest** — daily "new hooks in your niche" via existing in-app notifications (no email). Track-own-handle works via /track. Deferred: email digest (no sendable domain) + viral-score-trend-after-applying-hooks (needs new model).
 - [x] **8.8 Persist generated hooks/remixes**.
 - [x] **8.9 Per-profile freshness rendering**.
 

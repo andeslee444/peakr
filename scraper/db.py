@@ -709,6 +709,52 @@ def pop_scrape_queue() -> Optional[tuple]:
     return (queue_id, profile['username'], profile['platform'])
 
 
+def generate_niche_digest_notifications() -> int:
+    """In-app 'new hooks in your niche' digest (closes the one-way value loop).
+
+    For each user with a niche, if fresh hooks were analyzed in that niche in the
+    last day, create one deduped 'niche_digest' notification per user per day.
+    Uses the existing notifications system (no email needed). Returns count created.
+    """
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute("""
+        SELECT user_id, niche FROM creator_profiles
+        WHERE niche IS NOT NULL AND niche <> ''
+    """)
+    users = cur.fetchall()
+
+    count = 0
+    ins = conn.cursor()
+    for u in users:
+        cur.execute("""
+            SELECT COUNT(*) AS n FROM posts
+            WHERE analyzed_at > NOW() - INTERVAL '1 day'
+              AND hook_analysis->>'niche' = %s
+        """, (u['niche'],))
+        n = cur.fetchone()['n']
+        if not n:
+            continue
+        title = f"{n} new hooks in {u['niche']}"
+        body = f"We analyzed {n} fresh viral hooks in your niche. See what's working."
+        link = f"/dashboard/hook-lab?niche={u['niche']}"
+        ins.execute("""
+            INSERT INTO notifications (user_id, type, title, body, link)
+            SELECT %s, 'niche_digest', %s, %s, %s
+            WHERE NOT EXISTS (
+                SELECT 1 FROM notifications
+                WHERE user_id = %s AND type = 'niche_digest' AND DATE(created_at) = CURRENT_DATE
+            )
+        """, (u['user_id'], title, body, link, u['user_id']))
+        count += ins.rowcount
+
+    conn.commit()
+    ins.close()
+    cur.close()
+    conn.close()
+    return count
+
+
 def get_scrape_debt(sla_seconds: int) -> int:
     """Count active profiles past their refresh SLA — the scrape backlog.
 

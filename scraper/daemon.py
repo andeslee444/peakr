@@ -31,6 +31,7 @@ from scraper.db import (
     queue_top_posts_for_analysis, backfill_hook_patterns, recalculate_pattern_stats,
     generate_viral_post_notifications, reclaim_stale_queue_entries, record_heartbeat,
     record_scrape_failure, record_scrape_success, get_scrape_debt,
+    generate_niche_digest_notifications,
 )
 from scraper.observability import init_sentry, capture_exception
 from scraper.backoff import should_attempt
@@ -183,6 +184,13 @@ def run_daily_maintenance():
         log.info("[MAINT] Cache cleaned")
     except Exception as e:
         log.error(f"[MAINT] Cache cleanup error: {e}")
+
+    log.info("[MAINT] Sending 'new hooks in your niche' digests...")
+    try:
+        sent = generate_niche_digest_notifications()
+        log.info(f"[MAINT] Niche digest: {sent} notifications created")
+    except Exception as e:
+        log.error(f"[MAINT] Niche digest error: {e}")
 
 
 def run_hashtag_discovery():
