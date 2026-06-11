@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getPool } from '@/lib/db';
 import { getUserId, unauthorized } from '@/lib/api-auth';
+import { assertSafeUrl, UnsafeUrlError, THUMBNAIL_HOSTS } from '@/lib/ssrf';
 
 export async function GET(
   _request: NextRequest,
@@ -15,7 +16,7 @@ export async function GET(
   try {
     const pool = getPool();
     const { rows } = await pool.query(
-      'SELECT keyframe_base64, thumbnail_url FROM posts WHERE id = $1',
+      'SELECT keyframe_base64, thumbnail_url, s3_thumbnail_url FROM posts WHERE id = $1',
       [postId]
     );
 
@@ -23,7 +24,7 @@ export async function GET(
       return NextResponse.json({ error: 'Post not found' }, { status: 404 });
     }
 
-    const { keyframe_base64, thumbnail_url } = rows[0];
+    const { keyframe_base64, thumbnail_url, s3_thumbnail_url } = rows[0];
 
     if (keyframe_base64) {
       const buffer = Buffer.from(keyframe_base64, 'base64');
@@ -35,9 +36,18 @@ export async function GET(
       });
     }
 
-    // Fallback: redirect to thumbnail
-    if (thumbnail_url) {
-      return NextResponse.redirect(thumbnail_url);
+    // Fallback: redirect to a thumbnail. Prefer our own re-hosted S3 copy, then
+    // the raw CDN URL — but only after validating the target against an
+    // allowlist, so a tampered/scraped URL can't turn this into an open redirect.
+    const candidate = s3_thumbnail_url || thumbnail_url;
+    if (candidate) {
+      try {
+        const safe = assertSafeUrl(String(candidate), THUMBNAIL_HOSTS);
+        return NextResponse.redirect(safe.toString());
+      } catch (e) {
+        if (!(e instanceof UnsafeUrlError)) throw e;
+        // fall through to 404 for a disallowed host
+      }
     }
 
     return NextResponse.json({ error: 'No keyframe available' }, { status: 404 });
