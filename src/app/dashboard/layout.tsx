@@ -36,10 +36,10 @@ export default function DashboardLayout({
   const { data: session } = useSession();
   const onboardingChecked = useRef(false);
 
-  // Redirect new users to onboarding (profile setup). Prefer the JWT-stamped
-  // status to avoid a per-load fetch + content flash for returning users.
+  // Nudge new users to onboarding — but never interrupt the Hook Lab landing
+  // (the aha-moment). Let them explore first; the Profile page stays in the nav.
   useEffect(() => {
-    if (onboardingChecked.current || pathname === '/dashboard/profile') return;
+    if (onboardingChecked.current || pathname === '/dashboard/profile' || pathname === '/dashboard/hook-lab') return;
     if (session === undefined) return; // wait for the session to load
     if (!session?.user) return;
     onboardingChecked.current = true;

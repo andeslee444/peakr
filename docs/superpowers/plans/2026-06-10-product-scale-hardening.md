@@ -72,7 +72,7 @@
 - [x] **8.2 `WHISPER_MODE=api` path**.
 - [x] **8.3 Landing page reposition (copy + real screenshots)**.
 - [x] **8.4 a11y pass (labels, focus trap, keyboard)**.
-- [ ] **8.5 Land-in-Hook-Lab onboarding**.
+- [x] **8.5 Land-in-Hook-Lab onboarding**.
 - [x] **8.6 Hook Lab empty-state CTA / clear-niche**.
 - [ ] **8.7 Value loop: track own handle + weekly digest**.
 - [ ] **8.8 Persist generated hooks/remixes**.
