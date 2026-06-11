@@ -17,7 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from scraper.db import get_unanalyzed_viral_posts, save_hook_analysis, mark_analysis_failed
-from scraper.transcribe import download_video, extract_audio, extract_keyframes, transcribe_audio
+from scraper.transcribe import download_video, extract_audio, extract_keyframes, transcribe_audio, ensure_ffmpeg_on_path
 from scraper.hooks import analyze_hook
 from scraper.analysis_state import skip_reason, parse_attempts, MAX_ANALYSIS_ATTEMPTS
 
@@ -151,6 +151,8 @@ def _analyze_concurrently(posts: list, max_workers: int, worker=analyze_post) ->
 
 def run_analysis_pass(max_count: int = 10, threshold: float = 1.5) -> int:
     """Run one analysis pass. Returns number of posts analyzed."""
+    # Self-bootstrap ffmpeg (system or pip-bundled) before any audio work.
+    ensure_ffmpeg_on_path()
     posts = get_unanalyzed_viral_posts(threshold=threshold, limit=max_count * 2)
 
     if not posts:
