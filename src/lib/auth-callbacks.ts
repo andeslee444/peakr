@@ -10,6 +10,7 @@ export interface ShapedSessionUser {
   email?: string | null;
   image?: string | null;
   plan?: Plan;
+  onboardingComplete?: boolean;
 }
 
 export interface ShapedSession {
@@ -43,6 +44,7 @@ export function shapeSession<T extends { user?: { name?: string | null } | null 
     if (token.userId) user.id = String(token.userId);
     if (token.username) user.name = String(token.username);
     user.plan = normalizePlan(token.plan);
+    user.onboardingComplete = token.onboardingComplete === true;
   }
   return session as T & ShapedSession;
 }

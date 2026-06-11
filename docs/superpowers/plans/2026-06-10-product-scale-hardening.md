@@ -63,7 +63,7 @@
 - [ ] **7.2 Shared rate limiter** — Upstash/Vercel KV behind `rateLimit()` (or document the limitation + gate).
 - [x] **7.3 Remove dead `saved_hooks`/`user_hooks`; fix `saved/import` stat recompute**.
 - [x] **7.4 Schema source of truth + CI drift check**.
-- [ ] **7.5 Onboarding gate on JWT value**.
+- [x] **7.5 Onboarding gate on JWT value**.
 - [x] **7.6 CI gate (vitest+pytest on push) + pre-restart smoke gate + rollback**.
 
 ## Wave 8 — Throughput + remaining product

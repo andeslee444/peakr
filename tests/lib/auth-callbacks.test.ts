@@ -38,4 +38,9 @@ describe('shapeSession', () => {
     const s = shapeSession({ user: {} }, { userId: 2, username: 'andes', plan: 'free' });
     expect(s.user?.name).toBe('andes');
   });
+
+  it('exposes onboardingComplete (so the dashboard can skip the onboarding fetch)', () => {
+    expect(shapeSession({ user: {} }, { userId: 1, onboardingComplete: true }).user?.onboardingComplete).toBe(true);
+    expect(shapeSession({ user: {} }, { userId: 1 }).user?.onboardingComplete).toBe(false);
+  });
 });

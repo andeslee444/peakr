@@ -122,6 +122,16 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         const { rows: [u] } = await pool.query('SELECT plan, token_version FROM users WHERE id = $1', [token.userId]);
         token.plan = normalizePlan(u?.plan);
         token.tokenVersion = Number(u?.token_version ?? 0);
+        // Stamp onboarding status so the dashboard can skip a per-load fetch+flash.
+        try {
+          const { rows: [cp] } = await pool.query(
+            "SELECT onboarding_step FROM creator_profiles WHERE user_id = $1",
+            [token.userId]
+          );
+          token.onboardingComplete = cp?.onboarding_step === 'complete';
+        } catch {
+          token.onboardingComplete = false;
+        }
       } else if (token.userId) {
         // Subsequent requests: revoke the session if the password changed since
         // this token was issued (token_version bumped on change/reset).

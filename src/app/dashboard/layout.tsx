@@ -36,11 +36,18 @@ export default function DashboardLayout({
   const { data: session } = useSession();
   const onboardingChecked = useRef(false);
 
-  // Redirect new users to onboarding (profile setup)
+  // Redirect new users to onboarding (profile setup). Prefer the JWT-stamped
+  // status to avoid a per-load fetch + content flash for returning users.
   useEffect(() => {
     if (onboardingChecked.current || pathname === '/dashboard/profile') return;
+    if (session === undefined) return; // wait for the session to load
+    if (!session?.user) return;
     onboardingChecked.current = true;
 
+    if ((session.user as { onboardingComplete?: boolean }).onboardingComplete) return;
+
+    // JWT says incomplete (or unknown) — confirm against the live profile, since
+    // onboarding may have been completed within this session (token not refreshed).
     fetch('/api/creator-profile')
       .then(res => res.json())
       .then(data => {
@@ -49,7 +56,7 @@ export default function DashboardLayout({
         }
       })
       .catch(() => {});
-  }, [pathname, router]);
+  }, [pathname, router, session]);
 
   // Notifications
   interface Notification {
