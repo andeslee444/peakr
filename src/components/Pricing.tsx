@@ -1,7 +1,10 @@
 'use client';
 
 import Link from 'next/link';
+import { PRO_TRACK_LIMIT } from '@/lib/plan';
 
+// Both paid options grant the Pro track limit (the difference is billing period,
+// not features). Numbers come from the single source of truth in lib/plan.ts.
 const plans = [
   {
     name: 'Monthly',
@@ -11,7 +14,7 @@ const plans = [
     period: '/first month',
     afterPrice: 'Then $24/month',
     features: [
-      'Track 15 accounts',
+      `Track ${PRO_TRACK_LIMIT} accounts`,
       'Save Instagram & TikTok content',
       'Export viral content',
       'Email support',
@@ -27,7 +30,7 @@ const plans = [
     period: '/month',
     afterPrice: 'Billed annually at $120',
     features: [
-      'Track 50 accounts',
+      `Track ${PRO_TRACK_LIMIT} accounts`,
       'Save Instagram & TikTok content',
       'Export viral content',
       'Priority email support',

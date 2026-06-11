@@ -5,6 +5,8 @@ import bcrypt from 'bcryptjs';
 import { getPool } from './db';
 import { normalizeEmail } from './auth-validation';
 import { rateLimit } from './rate-limit';
+import { normalizePlan } from './plan';
+import { shapeSession } from './auth-callbacks';
 
 export const { handlers, signIn, signOut, auth } = NextAuth({
   trustHost: true,
@@ -112,16 +114,18 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         token.userId = Number(user.id);
         token.username = user.name || user.email;
       }
+      // On login (account present), attach the live subscription plan once so
+      // the client can gate UI without an extra round-trip. Enforcement still
+      // reads the live plan server-side, so a later upgrade isn't blocked.
+      if (account && token.userId) {
+        const pool = getPool();
+        const { rows: [u] } = await pool.query('SELECT plan FROM users WHERE id = $1', [token.userId]);
+        token.plan = normalizePlan(u?.plan);
+      }
       return token;
     },
     async session({ session, token }) {
-      if (token.userId) {
-        session.user.id = String(token.userId);
-      }
-      if (token.username) {
-        session.user.name = token.username as string;
-      }
-      return session;
+      return shapeSession(session, token);
     },
   },
 });

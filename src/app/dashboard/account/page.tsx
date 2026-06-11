@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useSession, signOut } from 'next-auth/react';
 import { formatNumber } from '@/lib/format';
+import { normalizePlan, trackLimit as planTrackLimit } from '@/lib/plan';
 
 interface Overview {
   totalAccounts: number;
@@ -25,7 +26,9 @@ export default function AccountPage() {
   }, []);
 
   const trackedCount = stats?.totalAccounts ?? 0;
-  const trackLimit = 15;
+  const plan = normalizePlan((session?.user as { plan?: string } | undefined)?.plan);
+  const planLabel = plan === 'pro' ? 'Pro' : 'Free';
+  const trackLimit = planTrackLimit(plan);
 
   // Change password state
   const [currentPassword, setCurrentPassword] = useState('');
@@ -189,7 +192,7 @@ export default function AccountPage() {
           <div className="flex items-center justify-between">
             <div>
               <p className="text-indigo-100 text-sm">Current Plan</p>
-              <p className="text-2xl font-bold mt-1">Monthly</p>
+              <p className="text-2xl font-bold mt-1">{planLabel}</p>
             </div>
             <div className="text-right">
               <p className="text-indigo-100 text-sm">Usage</p>

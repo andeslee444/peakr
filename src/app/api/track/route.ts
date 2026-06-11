@@ -3,6 +3,7 @@ import { auth } from '@/lib/auth';
 import { getPool } from '@/lib/db';
 import { enforceRateLimitFor } from '@/lib/rate-limit';
 import { assertSafeUrl } from '@/lib/ssrf';
+import { trackLimit, normalizePlan } from '@/lib/plan';
 
 const USERNAME_RE = /^[a-zA-Z0-9_.]{1,30}$/;
 // Avatar URLs are client-supplied and rendered to other users; only accept
@@ -67,6 +68,31 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(
         { success: false, error: 'Could not find this profile. Check the username and try again.' },
         { status: 404 }
+      );
+    }
+
+    // Enforce the per-plan track limit. Read the LIVE plan + count + whether this
+    // profile is already tracked, so a just-upgraded user is never blocked by a
+    // stale token and re-tracking an existing profile stays idempotent.
+    const { rows: [gate] } = await pool.query(
+      `SELECT
+         (SELECT plan FROM users WHERE id = $1) AS plan,
+         (SELECT COUNT(*)::int FROM user_tracked_profiles WHERE user_id = $1) AS tracked_count,
+         EXISTS(SELECT 1 FROM user_tracked_profiles WHERE user_id = $1 AND profile_id = $2) AS already`,
+      [userId, profile.id]
+    );
+    const plan = normalizePlan(gate?.plan);
+    const limit = trackLimit(plan);
+    if (!gate?.already && (gate?.tracked_count ?? 0) >= limit) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: `You're tracking the maximum of ${limit} accounts on the ${plan} plan.`,
+          limit,
+          plan,
+          upgrade: plan === 'free',
+        },
+        { status: 402 }
       );
     }
 
