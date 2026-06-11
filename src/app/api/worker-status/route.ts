@@ -30,15 +30,19 @@ export async function GET() {
       Date.now()
     );
 
-    return NextResponse.json({
-      alive: health.alive,
-      healthy: health.healthy,
-      degraded: health.degraded,
-      last_heartbeat_at: hb?.last_heartbeat_at ?? null,
-      seconds_ago: health.secondsAgo,
-      status: hb?.status ?? null,
-      recent_scrapes: recentScrapes,
-    });
+    return NextResponse.json(
+      {
+        alive: health.alive,
+        healthy: health.healthy,
+        degraded: health.degraded,
+        last_heartbeat_at: hb?.last_heartbeat_at ?? null,
+        seconds_ago: health.secondsAgo,
+        status: hb?.status ?? null,
+        recent_scrapes: recentScrapes,
+      },
+      // Global status — let many dashboard tabs share one cached read for ~20s.
+      { headers: { 'Cache-Control': 'public, max-age=20' } }
+    );
   } catch {
     return NextResponse.json({ alive: false, healthy: false, error: 'status unavailable' }, { status: 200 });
   }

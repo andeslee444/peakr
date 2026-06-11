@@ -71,6 +71,8 @@ export default function DashboardLayout({
   useEffect(() => {
     let cancelled = false;
     const check = () => {
+      // Don't poll a backgrounded tab — saves a query/min per idle open tab.
+      if (typeof document !== 'undefined' && document.hidden) return;
       fetch('/api/worker-status')
         .then((r) => r.json())
         .then((d) => { if (!cancelled) setWorkerAlive(d.alive !== false); })
@@ -113,8 +115,17 @@ export default function DashboardLayout({
 
   useEffect(() => {
     fetchNotifications();
-    const interval = setInterval(fetchNotifications, 60000); // poll every 60s
-    return () => clearInterval(interval);
+    const interval = setInterval(() => {
+      // Skip backgrounded tabs; refresh happens on focus via visibilitychange.
+      if (typeof document !== 'undefined' && document.hidden) return;
+      fetchNotifications();
+    }, 60000); // poll every 60s
+    const onVisible = () => { if (!document.hidden) fetchNotifications(); };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
   }, [fetchNotifications]);
 
   // Close dropdown on outside click

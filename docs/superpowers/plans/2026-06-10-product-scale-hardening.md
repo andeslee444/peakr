@@ -54,7 +54,7 @@
 - [x] **6.2 Drop `keyframe_base64` from feed SELECT** — serve via `/api/keyframe`; keep `transcript` (rendered).
 - [x] **6.3 `viral_score` skip no-op writes** — `AND viral_score IS DISTINCT FROM ROUND(...)`.
 - [ ] **6.4 Analytics cache + user-hooks pagination** — short-TTL cache; fix N+1.
-- [ ] **6.5 Dashboard polling** — Page Visibility gating + Cache-Control on worker-status/notifications.
+- [x] **6.5 Dashboard polling** — Page Visibility gating + Cache-Control on worker-status/notifications.
 - [ ] **6.6 Daemon connection pool**.
 
 ## Wave 7 — Security / session / hygiene
