@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import { getPool } from '@/lib/db';
+import { stripHeavyFields } from '@/lib/post-list';
 
 export async function GET(request: Request) {
   try {
@@ -39,7 +40,7 @@ export async function GET(request: Request) {
       [userId, platform, limit, offset]
     );
 
-    return NextResponse.json({ posts, total });
+    return NextResponse.json({ posts: stripHeavyFields(posts), total });
   } catch {
     return NextResponse.json({ posts: [], total: 0, error: 'Failed to fetch tracked posts' }, { status: 500 });
   }

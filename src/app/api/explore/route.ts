@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getPool } from '@/lib/db';
 import { getUserId, unauthorized } from '@/lib/api-auth';
 import { savedPostsClause } from '@/lib/saved-posts-sql';
+import { stripHeavyFields } from '@/lib/post-list';
 
 export async function GET(request: NextRequest) {
   const userId = await getUserId();
@@ -44,7 +45,7 @@ export async function GET(request: NextRequest) {
     params.push(limit);
 
     const { rows: posts } = await pool.query(query, params);
-    return NextResponse.json({ posts });
+    return NextResponse.json({ posts: stripHeavyFields(posts) });
   } catch {
     return NextResponse.json({ posts: [], error: 'Failed to fetch posts' }, { status: 500 });
   }

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import { getPool } from '@/lib/db';
 import { savedPostsClause } from '@/lib/saved-posts-sql';
+import { stripHeavyFields } from '@/lib/post-list';
 
 export async function GET(request: NextRequest) {
   try {
@@ -114,7 +115,7 @@ export async function GET(request: NextRequest) {
     params.push(limit, offset);
 
     const { rows: posts } = await pool.query(query, params);
-    return NextResponse.json({ posts, total });
+    return NextResponse.json({ posts: stripHeavyFields(posts), total });
   } catch (e) {
     console.error('hook-lab error:', e);
     return NextResponse.json({ posts: [], total: 0, error: 'Failed to fetch posts' }, { status: 500 });

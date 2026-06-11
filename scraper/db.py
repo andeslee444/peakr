@@ -491,6 +491,10 @@ def migrate_indexes():
         CREATE INDEX IF NOT EXISTS idx_posts_profile_id ON posts(profile_id);
         CREATE INDEX IF NOT EXISTS idx_posts_viral_score ON posts(viral_score DESC);
         CREATE INDEX IF NOT EXISTS idx_posts_posted_at ON posts(posted_at DESC);
+        -- Hook Lab feed: sort by viral_score over analyzed posts only.
+        CREATE INDEX IF NOT EXISTS idx_posts_analyzed_viral ON posts(viral_score DESC) WHERE analyzed_at IS NOT NULL;
+        -- Hook Lab JSONB facet filters (hook_type / niche / emotional_trigger / ...).
+        CREATE INDEX IF NOT EXISTS idx_posts_hook_analysis_gin ON posts USING GIN (hook_analysis);
     """)
     conn.commit()
     cur.close()
