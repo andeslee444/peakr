@@ -48,7 +48,7 @@ export default function Navigation() {
                   Login
                 </Link>
                 <Link
-                  href="/login"
+                  href="/signup"
                   className="gradient-bg text-white px-5 py-2 rounded-full font-medium hover:opacity-90 transition-opacity"
                 >
                   Go Viral
@@ -96,7 +96,7 @@ export default function Navigation() {
                   Login
                 </Link>
                 <Link
-                  href="/login"
+                  href="/signup"
                   className="block text-center gradient-bg text-white px-5 py-2 rounded-full font-medium"
                 >
                   Go Viral

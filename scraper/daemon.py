@@ -30,6 +30,8 @@ from scraper.db import (
     compute_daily_top_hooks, update_profile_niches, clean_expired_video_cache,
     queue_top_posts_for_analysis, backfill_hook_patterns, recalculate_pattern_stats,
     generate_viral_post_notifications, reclaim_stale_queue_entries, record_heartbeat,
+    record_scrape_failure, record_scrape_success, get_scrape_debt,
+    generate_niche_digest_notifications,
 )
 from scraper.observability import init_sentry, capture_exception
 from scraper.backoff import should_attempt
@@ -47,6 +49,10 @@ RATE_LIMITS = {
 }
 
 REFRESH_INTERVAL = 4 * 3600  # 4 hours
+
+# Page when this many profiles fall behind the refresh SLA (one daemon's ceiling
+# is ~40-45 paying users; debt rising past this means it's time for a worker pool).
+SCRAPE_DEBT_ALERT_THRESHOLD = 50
 
 # US Eastern (handles EST/EDT automatically)
 EST = ZoneInfo("America/New_York")
@@ -111,6 +117,13 @@ def scrape_seed_list(creators: list, tag: str = "SEED"):
         if not running:
             break
 
+        # Beat from inside the batch — a multi-hour seed scrape would otherwise
+        # starve the main-loop heartbeat and trip a false /api/worker-status down.
+        try:
+            record_heartbeat(WORKER_ID)
+        except Exception:
+            pass
+
         # Yield to any user-triggered tracks before continuing the seed batch.
         drain_scrape_queue()
 
@@ -171,6 +184,13 @@ def run_daily_maintenance():
         log.info("[MAINT] Cache cleaned")
     except Exception as e:
         log.error(f"[MAINT] Cache cleanup error: {e}")
+
+    log.info("[MAINT] Sending 'new hooks in your niche' digests...")
+    try:
+        sent = generate_niche_digest_notifications()
+        log.info(f"[MAINT] Niche digest: {sent} notifications created")
+    except Exception as e:
+        log.error(f"[MAINT] Niche digest error: {e}")
 
 
 def run_hashtag_discovery():
@@ -325,6 +345,15 @@ def run_daemon():
                 try:
                     record_heartbeat(WORKER_ID)
                     reclaim_stale_queue_entries()
+                    # Scrape-debt: profiles past the 4h SLA. Rising debt is the
+                    # silent failure mode (one daemon can't keep up) — alert on it.
+                    debt = get_scrape_debt(REFRESH_INTERVAL)
+                    if debt > 0:
+                        log.info(f"[DEBT] {debt} profiles past the {REFRESH_INTERVAL//3600}h refresh SLA")
+                    if debt >= SCRAPE_DEBT_ALERT_THRESHOLD:
+                        capture_exception(Exception(
+                            f"Scrape debt high: {debt} profiles past SLA — daemon can't keep up"
+                        ))
                 except Exception as e:
                     log.error(f"Heartbeat/reclaim error: {e}")
                     capture_exception(e)
@@ -366,6 +395,11 @@ def run_daemon():
                                 log.info(f"{'done' if ok else 'error'} {platform}/@{username}")
                                 if ok:
                                     scrape_failures.pop(key, None)
+                                    # Persist success so the reap counter resets across restarts.
+                                    try:
+                                        record_scrape_success(username, platform)
+                                    except Exception:
+                                        pass
                                     try:
                                         n = generate_viral_post_notifications(username, platform)
                                         if n:
@@ -374,8 +408,17 @@ def run_daemon():
                                         log.error(f"[NOTIFY] Error generating notifications: {e}")
                                 else:
                                     scrape_failures[key] = {"failures": fstate["failures"] + 1, "last": time.time()}
+                                    # Persist failure so a dead profile is reaped even across restarts.
+                                    try:
+                                        record_scrape_failure(username, platform)
+                                    except Exception:
+                                        pass
                             except Exception as e:
                                 scrape_failures[key] = {"failures": fstate["failures"] + 1, "last": time.time()}
+                                try:
+                                    record_scrape_failure(username, platform)
+                                except Exception:
+                                    pass
                                 log.error(f"Error scraping {platform}/@{username}: {e}")
 
                             delay = RATE_LIMITS.get(platform, 60) + random.uniform(0, 15)

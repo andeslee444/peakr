@@ -1,9 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getPool } from '@/lib/db';
 import { getUserId, unauthorized } from '@/lib/api-auth';
+import { savedPostsClause } from '@/lib/saved-posts-sql';
+import { stripHeavyFields } from '@/lib/post-list';
 
 export async function GET(request: NextRequest) {
-  if ((await getUserId()) === null) return unauthorized();
+  const userId = await getUserId();
+  if (userId === null) return unauthorized();
   try {
     const { searchParams } = new URL(request.url);
     const sort = searchParams.get('sort') || 'viral_score';
@@ -19,15 +22,20 @@ export async function GET(request: NextRequest) {
       default: orderBy = 'p.viral_score DESC';
     }
 
-    let query = `
-      SELECT p.*, pr.username, pr.platform, pr.avatar_url, pr.display_name,
-             (sp.id IS NOT NULL) AS is_saved
-      FROM posts p
-      JOIN profiles pr ON p.profile_id = pr.id
-      LEFT JOIN saved_posts sp ON sp.post_id = p.id
-    `;
     const params: (string | number)[] = [];
     let paramIndex = 1;
+
+    // User-scoped is_saved (EXISTS) — never a fan-out join over per-user saved_posts.
+    const saved = savedPostsClause(Number(userId), paramIndex);
+    params.push(...saved.params);
+    paramIndex = saved.nextIndex;
+
+    let query = `
+      SELECT p.*, pr.username, pr.platform, pr.avatar_url, pr.display_name,
+             ${saved.fragment}
+      FROM posts p
+      JOIN profiles pr ON p.profile_id = pr.id
+    `;
 
     if (platform && platform !== 'all') {
       query += ` WHERE pr.platform = $${paramIndex++}`;
@@ -37,7 +45,7 @@ export async function GET(request: NextRequest) {
     params.push(limit);
 
     const { rows: posts } = await pool.query(query, params);
-    return NextResponse.json({ posts });
+    return NextResponse.json({ posts: stripHeavyFields(posts) });
   } catch {
     return NextResponse.json({ posts: [], error: 'Failed to fetch posts' }, { status: 500 });
   }

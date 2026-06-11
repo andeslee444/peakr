@@ -4,6 +4,7 @@ import { getPool } from '@/lib/db';
 import { isTikTokUrl, parseTikTokUrl, parseFromOEmbed } from '@/lib/tiktok-url';
 import { isInstagramReelUrl, parseInstagramReelUrl } from '@/lib/instagram-url';
 import { normalizeTemplate } from '@/lib/normalize-template';
+import { recomputePatternStats } from '@/lib/hook-patterns';
 
 interface OEmbedResponse {
   title: string;
@@ -196,6 +197,10 @@ export async function POST(request: NextRequest) {
              VALUES ($1, $2) ON CONFLICT DO NOTHING`,
             [pattern.id, post.id]
           );
+
+          // Recompute pattern stats so imported patterns don't carry stale
+          // example_count / averages (the manual-save path already does this).
+          await recomputePatternStats(client, pattern.id);
 
           // Save pattern for user
           await client.query(

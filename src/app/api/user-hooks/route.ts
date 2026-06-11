@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import { getPool } from '@/lib/db';
 import { normalizeTemplate } from '@/lib/normalize-template';
+import { recomputePatternStats } from '@/lib/hook-patterns';
 
 export async function POST(request: NextRequest) {
   const session = await auth();
@@ -66,24 +67,8 @@ export async function POST(request: NextRequest) {
       [pattern.id, post_id]
     );
 
-    // Update pattern stats
-    await client.query(
-      `UPDATE hook_patterns SET
-         example_count = sub.cnt,
-         avg_viral_score = sub.avg_vs,
-         avg_views = sub.avg_v,
-         updated_at = NOW()
-       FROM (
-         SELECT COUNT(*) AS cnt,
-                COALESCE(AVG(p.viral_score), 0) AS avg_vs,
-                COALESCE(AVG(p.views), 0) AS avg_v
-         FROM hook_pattern_posts hpp
-         JOIN posts p ON hpp.post_id = p.id
-         WHERE hpp.pattern_id = $1
-       ) sub
-       WHERE hook_patterns.id = $1`,
-      [pattern.id]
-    );
+    // Update pattern stats (shared with saved/import).
+    await recomputePatternStats(client, pattern.id);
 
     // Save pattern for user
     const { rows: [saved] } = await client.query(
@@ -184,12 +169,18 @@ export async function GET(request: NextRequest) {
     const exampleThumbnails: Record<number, Array<{ post_id: number; thumbnail_url: string | null; s3_thumbnail_url: string | null }>> = {};
 
     if (patternIds.length > 0) {
+      // Bound to the top 5 examples per pattern in SQL — the old query fetched
+      // EVERY post for every pattern and discarded all but 5 in JS (unbounded
+      // DB→server transfer that grew with each pattern's example count).
       const { rows: examples } = await pool.query(`
-        SELECT hpp.pattern_id, p.id as post_id, p.thumbnail_url, p.s3_thumbnail_url
-        FROM hook_pattern_posts hpp
-        JOIN posts p ON hpp.post_id = p.id
-        WHERE hpp.pattern_id = ANY($1)
-        ORDER BY p.viral_score DESC
+        SELECT pattern_id, post_id, thumbnail_url, s3_thumbnail_url FROM (
+          SELECT hpp.pattern_id, p.id AS post_id, p.thumbnail_url, p.s3_thumbnail_url,
+                 ROW_NUMBER() OVER (PARTITION BY hpp.pattern_id ORDER BY p.viral_score DESC) AS rn
+          FROM hook_pattern_posts hpp
+          JOIN posts p ON hpp.post_id = p.id
+          WHERE hpp.pattern_id = ANY($1)
+        ) ranked
+        WHERE rn <= 5
       `, [patternIds]);
 
       for (const ex of examples) {

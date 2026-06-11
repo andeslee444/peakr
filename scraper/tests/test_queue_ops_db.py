@@ -1,5 +1,8 @@
 """Integration tests for stuck-queue recovery and worker heartbeats."""
 
+import threading
+
+import psycopg2
 import pytest
 
 
@@ -37,6 +40,42 @@ def test_reclaim_resets_stale_in_progress_rows(scraper_db, db_conn):
         assert cur.fetchone()[0] == 'pending'
         cur.execute("SELECT status FROM scrape_queue WHERE id = %s", (fresh_id,))
         assert cur.fetchone()[0] == 'in_progress'
+
+
+@pytest.mark.db
+def test_pop_skips_a_locked_row_instead_of_blocking(scraper_db, db_conn, test_dsn):
+    """Two workers must not double-claim. With FOR UPDATE SKIP LOCKED, popping
+    while another transaction holds the lowest pending row returns the NEXT row
+    rather than blocking on the locked one."""
+    profile_id = _insert_profile(db_conn)
+    with db_conn.cursor() as cur:
+        cur.execute("INSERT INTO scrape_queue (profile_id, status) VALUES (%s, 'pending') RETURNING id", (profile_id,))
+        row1 = cur.fetchone()[0]
+        cur.execute("INSERT INTO scrape_queue (profile_id, status) VALUES (%s, 'pending') RETURNING id", (profile_id,))
+        row2 = cur.fetchone()[0]
+    db_conn.commit()
+
+    # Lock the lowest-id pending row from a separate, uncommitted transaction.
+    lock_conn = psycopg2.connect(test_dsn)
+    try:
+        with lock_conn.cursor() as cur:
+            cur.execute("SELECT id FROM scrape_queue WHERE id = %s FOR UPDATE", (row1,))
+
+        result = {}
+        worker = threading.Thread(target=lambda: result.setdefault('val', scraper_db.pop_scrape_queue()))
+        worker.start()
+        worker.join(timeout=5)
+        blocked = worker.is_alive()
+
+        # Release the lock so a blocked worker can finish and the thread joins.
+        lock_conn.rollback()
+        worker.join(timeout=5)
+
+        assert not blocked, "pop_scrape_queue blocked on a locked row (missing FOR UPDATE SKIP LOCKED)"
+        assert result.get('val') is not None
+        assert result['val'][0] == row2, "should have claimed the next free row, not the locked one"
+    finally:
+        lock_conn.close()
 
 
 @pytest.mark.db

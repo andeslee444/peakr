@@ -31,7 +31,8 @@ export async function POST(request: Request) {
   }
 
   const newHash = await bcrypt.hash(password, 12);
-  await pool.query('UPDATE users SET password_hash = $1 WHERE id = $2', [newHash, row.user_id]);
+  // Bump token_version so a reset revokes any sessions an attacker may hold.
+  await pool.query('UPDATE users SET password_hash = $1, token_version = token_version + 1 WHERE id = $2', [newHash, row.user_id]);
   await pool.query('UPDATE password_reset_tokens SET used_at = NOW() WHERE id = $1', [row.id]);
 
   return NextResponse.json({ ok: true });

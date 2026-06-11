@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useSession, signOut } from 'next-auth/react';
+import { isPro } from '@/lib/plan';
 
 const navItems = [
   { name: 'Hook Lab', href: '/dashboard/hook-lab', icon: '🪝' },
@@ -35,11 +36,18 @@ export default function DashboardLayout({
   const { data: session } = useSession();
   const onboardingChecked = useRef(false);
 
-  // Redirect new users to onboarding (profile setup)
+  // Nudge new users to onboarding — but never interrupt the Hook Lab landing
+  // (the aha-moment). Let them explore first; the Profile page stays in the nav.
   useEffect(() => {
-    if (onboardingChecked.current || pathname === '/dashboard/profile') return;
+    if (onboardingChecked.current || pathname === '/dashboard/profile' || pathname === '/dashboard/hook-lab') return;
+    if (session === undefined) return; // wait for the session to load
+    if (!session?.user) return;
     onboardingChecked.current = true;
 
+    if ((session.user as { onboardingComplete?: boolean }).onboardingComplete) return;
+
+    // JWT says incomplete (or unknown) — confirm against the live profile, since
+    // onboarding may have been completed within this session (token not refreshed).
     fetch('/api/creator-profile')
       .then(res => res.json())
       .then(data => {
@@ -48,7 +56,7 @@ export default function DashboardLayout({
         }
       })
       .catch(() => {});
-  }, [pathname, router]);
+  }, [pathname, router, session]);
 
   // Notifications
   interface Notification {
@@ -70,6 +78,8 @@ export default function DashboardLayout({
   useEffect(() => {
     let cancelled = false;
     const check = () => {
+      // Don't poll a backgrounded tab — saves a query/min per idle open tab.
+      if (typeof document !== 'undefined' && document.hidden) return;
       fetch('/api/worker-status')
         .then((r) => r.json())
         .then((d) => { if (!cancelled) setWorkerAlive(d.alive !== false); })
@@ -112,8 +122,17 @@ export default function DashboardLayout({
 
   useEffect(() => {
     fetchNotifications();
-    const interval = setInterval(fetchNotifications, 60000); // poll every 60s
-    return () => clearInterval(interval);
+    const interval = setInterval(() => {
+      // Skip backgrounded tabs; refresh happens on focus via visibilitychange.
+      if (typeof document !== 'undefined' && document.hidden) return;
+      fetchNotifications();
+    }, 60000); // poll every 60s
+    const onVisible = () => { if (!document.hidden) fetchNotifications(); };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
   }, [fetchNotifications]);
 
   // Close dropdown on outside click
@@ -204,21 +223,23 @@ export default function DashboardLayout({
           })}
         </nav>
 
-        <div className="absolute bottom-0 left-0 right-0 p-4">
-          <div className="bg-gradient-to-r from-indigo-500 to-purple-500 rounded-xl p-4 text-white">
-            <p className="font-semibold">Upgrade to Pro</p>
-            <p className="text-sm text-indigo-100 mt-1">
-              Track 50 accounts & more
-            </p>
-            <button
-              onClick={handleUpgrade}
-              disabled={upgrading}
-              className="mt-3 w-full bg-white text-indigo-600 font-semibold py-2 rounded-lg hover:bg-indigo-50 transition-colors disabled:opacity-60"
-            >
-              {upgrading ? 'Starting…' : 'Upgrade'}
-            </button>
+        {!isPro((session?.user as { plan?: string } | undefined)?.plan) && (
+          <div className="absolute bottom-0 left-0 right-0 p-4">
+            <div className="bg-gradient-to-r from-indigo-500 to-purple-500 rounded-xl p-4 text-white">
+              <p className="font-semibold">Upgrade to Pro</p>
+              <p className="text-sm text-indigo-100 mt-1">
+                Track 50 accounts & more
+              </p>
+              <button
+                onClick={handleUpgrade}
+                disabled={upgrading}
+                className="mt-3 w-full bg-white text-indigo-600 font-semibold py-2 rounded-lg hover:bg-indigo-50 transition-colors disabled:opacity-60"
+              >
+                {upgrading ? 'Starting…' : 'Upgrade'}
+              </button>
+            </div>
           </div>
-        </div>
+        )}
       </aside>
 
       {/* Main content */}

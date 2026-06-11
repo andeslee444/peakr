@@ -3,8 +3,18 @@ import { auth } from '@/lib/auth';
 import { getPool } from '@/lib/db';
 import { enforceRateLimitFor } from '@/lib/rate-limit';
 import { fetchWithTimeout } from '@/lib/llm';
+import { getUserId, unauthorized } from '@/lib/api-auth';
+import { persistGeneratedHooks, getRecentGenerations } from '@/lib/generated-hooks';
 
 export const maxDuration = 60;
+
+// Return the user's recent saved generations so they aren't lost on refresh.
+export async function GET() {
+  const userId = await getUserId();
+  if (userId === null) return unauthorized();
+  const generations = await getRecentGenerations(getPool(), userId, 20);
+  return NextResponse.json({ generations });
+}
 
 export async function POST(request: NextRequest) {
   const session = await auth();
@@ -162,8 +172,12 @@ ${hookExamples}`;
     const data = await resp.json();
     const text = data.choices[0].message.content.trim();
     const generated = JSON.parse(text);
+    const hooks = generated.hooks || [];
 
-    return NextResponse.json({ hooks: generated.hooks || [] });
+    // Persist (best-effort) so the generation survives refresh/navigation.
+    await persistGeneratedHooks(pool, userId, topic, hooks);
+
+    return NextResponse.json({ hooks });
   } catch (e) {
     console.error('Generate hooks error:', e);
     return NextResponse.json({ error: 'Failed to generate hooks' }, { status: 500 });

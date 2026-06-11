@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  web:
+    name: Web (tsc + lint + vitest + build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: npm run lint
+      - run: npx vitest run
+      - run: npm run build
+        env:
+          # Build must not require real secrets; routes read env at request time.
+          DATABASE_URL: ''
+
+  scraper:
+    name: Scraper (pytest)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: test
+        ports: ['55432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      # conftest honors TEST_DATABASE_URL instead of spinning up its own container.
+      TEST_DATABASE_URL: postgresql://postgres:test@127.0.0.1:55432/postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install psycopg2-binary pytest
+      - run: python -m pytest scraper/tests/ -q
+
+  schema-drift:
+    name: Schema drift guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check the dual schema (profiles + posts) stays in sync
+        run: python3 scripts/check-schema-drift.py

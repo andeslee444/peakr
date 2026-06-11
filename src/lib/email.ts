@@ -14,6 +14,16 @@ export interface SendEmailResult {
   reason?: string;
 }
 
+/**
+ * Whether transactional email can actually be delivered. This is a *global*
+ * fact (does the deployment have an API key?), independent of any specific
+ * recipient — so callers can surface "email unavailable" without leaking
+ * whether a given account exists.
+ */
+export function isEmailConfigured(): boolean {
+  return !!process.env.RESEND_API_KEY;
+}
+
 export async function sendEmail({ to, subject, html }: SendEmailParams): Promise<SendEmailResult> {
   const apiKey = process.env.RESEND_API_KEY;
   const from = process.env.EMAIL_FROM || 'Peakr <noreply@peakr.app>';

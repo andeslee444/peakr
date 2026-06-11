@@ -3,6 +3,7 @@ import { getPool } from '@/lib/db';
 import { getStripe } from '@/lib/stripe';
 import { getUserId, unauthorized } from '@/lib/api-auth';
 import { enforceRateLimitFor } from '@/lib/rate-limit';
+import { normalizePlan } from '@/lib/plan';
 
 export async function POST(request: Request) {
   const userId = await getUserId();
@@ -16,8 +17,8 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Billing is not configured' }, { status: 503 });
   }
 
-  const { plan } = await request.json().catch(() => ({ plan: 'monthly' }));
-  const priceId = plan === 'annual' ? process.env.STRIPE_PRICE_ANNUAL : process.env.STRIPE_PRICE_MONTHLY;
+  const { plan: billingPeriod } = await request.json().catch(() => ({ plan: 'monthly' }));
+  const priceId = billingPeriod === 'annual' ? process.env.STRIPE_PRICE_ANNUAL : process.env.STRIPE_PRICE_MONTHLY;
   if (!priceId) {
     return NextResponse.json({ error: 'Selected plan is not available' }, { status: 503 });
   }
@@ -25,9 +26,18 @@ export async function POST(request: Request) {
   try {
     const pool = getPool();
     const { rows: [user] } = await pool.query(
-      'SELECT email, stripe_customer_id FROM users WHERE id = $1',
+      'SELECT email, stripe_customer_id, plan FROM users WHERE id = $1',
       [userId]
     );
+
+    // Don't start a second subscription for someone already on Pro — it would
+    // confuse Stripe and risk cross-tier double-billing. Send them to manage instead.
+    if (normalizePlan(user?.plan) === 'pro') {
+      return NextResponse.json(
+        { error: "You're already on the Pro plan.", alreadyPro: true },
+        { status: 409 }
+      );
+    }
 
     const base = process.env.AUTH_URL || new URL(request.url).origin;
     const session = await stripe.checkout.sessions.create({

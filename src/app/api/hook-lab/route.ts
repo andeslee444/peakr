@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import { getPool } from '@/lib/db';
+import { savedPostsClause } from '@/lib/saved-posts-sql';
+import { stripHeavyFields } from '@/lib/post-list';
 
 export async function GET(request: NextRequest) {
   try {
@@ -85,7 +87,12 @@ export async function GET(request: NextRequest) {
     const { rows: countRows } = await pool.query(countQuery, params);
     const total = parseInt(countRows[0].total, 10);
 
-    // Fetch posts
+    // Fetch posts. User-scoped is_saved (EXISTS) — never a fan-out join over
+    // per-user saved_posts, which would duplicate rows and desync from COUNT(*).
+    const saved = savedPostsClause(userId, paramIndex);
+    params.push(...saved.params);
+    paramIndex = saved.nextIndex;
+
     const isHookSavedSubquery = userId
       ? `, EXISTS (
             SELECT 1 FROM hook_pattern_posts hpp
@@ -97,11 +104,10 @@ export async function GET(request: NextRequest) {
 
     const query = `
       SELECT p.*, pr.username, pr.platform, pr.avatar_url, pr.display_name,
-             (sp.id IS NOT NULL) AS is_saved
+             ${saved.fragment}
              ${isHookSavedSubquery}
       FROM posts p
       JOIN profiles pr ON p.profile_id = pr.id
-      LEFT JOIN saved_posts sp ON sp.post_id = p.id
       ${whereClause}
       ORDER BY ${orderBy}
       LIMIT $${paramIndex++} OFFSET $${paramIndex}
@@ -109,7 +115,7 @@ export async function GET(request: NextRequest) {
     params.push(limit, offset);
 
     const { rows: posts } = await pool.query(query, params);
-    return NextResponse.json({ posts, total });
+    return NextResponse.json({ posts: stripHeavyFields(posts), total });
   } catch (e) {
     console.error('hook-lab error:', e);
     return NextResponse.json({ posts: [], total: 0, error: 'Failed to fetch posts' }, { status: 500 });

@@ -71,6 +71,31 @@ export default function InsightsPanel({ post, open, onClose, onPostUpdate, isSav
     }
   }, [post, open, postId, onPostUpdate]);
 
+  // While queued, poll the daemon's progress so the panel resolves in-session
+  // instead of leaving a permanent "check back later" box.
+  useEffect(() => {
+    if (status !== 'queued' || !postId || !open) return;
+    let attempts = 0;
+    const id = setInterval(async () => {
+      attempts += 1;
+      try {
+        const res = await fetch(`/api/analyze-hook?post_id=${postId}`);
+        const data = await res.json();
+        if (data.status === 'done') {
+          setAnalysis(data.hook_analysis);
+          setTranscript(data.transcript ?? null);
+          setStatus('done');
+          onPostUpdate?.(postId, { hook_analysis: data.hook_analysis, analyzed_at: data.analyzed_at, transcript: data.transcript });
+          clearInterval(id);
+        }
+      } catch {
+        /* keep polling */
+      }
+      if (attempts >= 30) clearInterval(id); // ~4 min cap
+    }, 8_000);
+    return () => clearInterval(id);
+  }, [status, postId, open, onPostUpdate]);
+
   // Close on Escape
   useEffect(() => {
     if (!open) return;

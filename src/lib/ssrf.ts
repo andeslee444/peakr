@@ -68,3 +68,23 @@ export const VIDEO_SOURCE_HOSTS = [
   'tiktok.com',
   'instagram.com',
 ];
+
+/**
+ * Hosts permitted as a `keyframe` redirect target: Instagram + TikTok image
+ * CDNs, plus our own S3 bucket (re-hosted thumbnails). Prevents the keyframe
+ * fallback from 302-ing the browser to an arbitrary scraped URL.
+ */
+export const THUMBNAIL_HOSTS = [
+  // Instagram / Facebook CDNs
+  'cdninstagram.com',
+  'fbcdn.net',
+  'instagram.com',
+  // TikTok / ByteDance CDNs
+  'tiktokcdn.com',
+  'tiktokcdn-us.com',
+  'ibyteimg.com',
+  'byteimg.com',
+  'muscdn.com',
+  // Our own re-hosted thumbnails
+  'amazonaws.com',
+];

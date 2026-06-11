@@ -24,6 +24,20 @@ export const DEFAULT_FILTERS: HookFilterState = {
   sort: 'viral_score',
 };
 
+/** Whether any narrowing filter is active (used to offer a "Clear filters"
+ *  escape from a silently-empty result set — usually an auto-applied niche). */
+export function hasActiveFilters(f: HookFilterState): boolean {
+  return (
+    !!f.hook_type ||
+    !!f.niche ||
+    !!f.hook_format ||
+    !!f.emotional_trigger ||
+    !!f.min_score ||
+    !!f.search ||
+    f.platform !== 'all'
+  );
+}
+
 const HOOK_TYPES = [
   'question', 'shock/surprise', 'curiosity gap', 'story opener', 'bold claim',
   'visual spectacle', 'direct address', 'trend/sound', 'before/after', 'social proof',

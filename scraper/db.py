@@ -9,6 +9,7 @@ from datetime import datetime
 from typing import Optional
 
 from scraper.analysis_state import MAX_ANALYSIS_ATTEMPTS, failure_marker
+from scraper.backoff import REAP_THRESHOLD
 
 DATABASE_URL = os.environ.get('DATABASE_URL', '')
 
@@ -38,6 +39,8 @@ CREATE TABLE IF NOT EXISTS profiles (
   post_count INTEGER DEFAULT 0,
   avg_views REAL DEFAULT 0,
   last_scraped_at TIMESTAMPTZ,
+  consecutive_failures INTEGER NOT NULL DEFAULT 0,
+  last_scrape_failed_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE(username, platform)
 );
@@ -168,25 +171,8 @@ CREATE TABLE IF NOT EXISTS user_tracked_profiles (
   UNIQUE(user_id, profile_id)
 );
 
-CREATE TABLE IF NOT EXISTS user_hooks (
-  id SERIAL PRIMARY KEY,
-  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  canonical_template TEXT,
-  display_name TEXT,
-  hook_type TEXT,
-  niche TEXT,
-  notes TEXT,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS user_hook_examples (
-  id SERIAL PRIMARY KEY,
-  user_hook_id INTEGER NOT NULL REFERENCES user_hooks(id) ON DELETE CASCADE,
-  post_id INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
-  added_at TIMESTAMPTZ DEFAULT NOW(),
-  UNIQUE(user_hook_id, post_id)
-);
+-- Legacy user_hooks / user_hook_examples removed (unused; live feature uses
+-- hook_patterns + user_saved_patterns). Old empty tables are left in place.
 
 CREATE TABLE IF NOT EXISTS hook_patterns (
   id SERIAL PRIMARY KEY,
@@ -249,10 +235,55 @@ CREATE INDEX IF NOT EXISTS idx_notifications_created_at ON notifications(created
 """
 
 
+import psycopg2.pool
+
+_POOL = None
+
+
+def _get_pool():
+    global _POOL
+    if _POOL is None:
+        maxconn = int(os.environ.get("DB_POOL_MAX", "5"))
+        _POOL = psycopg2.pool.ThreadedConnectionPool(1, maxconn, DATABASE_URL)
+    return _POOL
+
+
+class _PooledConn:
+    """Wraps a pooled connection so the pervasive ``conn.close()`` in this module
+    *returns* the connection to the pool instead of tearing down the TCP/TLS
+    session — eliminating a reconnect per DB call without touching call sites.
+    Any uncommitted/aborted transaction is rolled back before reuse."""
+
+    def __init__(self, raw, pool):
+        self._raw = raw
+        self._pool = pool
+
+    def close(self):
+        try:
+            if not self._raw.closed:
+                self._raw.rollback()
+            self._pool.putconn(self._raw)
+        except Exception:
+            try:
+                self._pool.putconn(self._raw, close=True)
+            except Exception:
+                try:
+                    self._raw.close()
+                except Exception:
+                    pass
+
+    def __getattr__(self, name):
+        return getattr(self._raw, name)
+
+
 def get_conn():
-    conn = psycopg2.connect(DATABASE_URL)
-    conn.autocommit = False
-    return conn
+    pool = _get_pool()
+    raw = pool.getconn()
+    if raw.closed:  # pooled connection died while idle (e.g. server timeout)
+        pool.putconn(raw, close=True)
+        raw = pool.getconn()
+    raw.autocommit = False
+    return _PooledConn(raw, pool)
 
 
 def init_db():
@@ -417,6 +448,47 @@ def migrate_audio_columns():
     conn.close()
 
 
+def migrate_failure_columns():
+    """Persistent per-profile failure tracking (survives daemon restarts)."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        ALTER TABLE profiles ADD COLUMN IF NOT EXISTS consecutive_failures INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE profiles ADD COLUMN IF NOT EXISTS last_scrape_failed_at TIMESTAMPTZ;
+    """)
+    conn.commit()
+    cur.close()
+    conn.close()
+
+
+def record_scrape_failure(username: str, platform: str) -> None:
+    """Increment a profile's consecutive-failure count (drives backoff + reaping)."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        """UPDATE profiles SET consecutive_failures = consecutive_failures + 1,
+                                last_scrape_failed_at = NOW()
+           WHERE username = %s AND platform = %s""",
+        (username, platform),
+    )
+    conn.commit()
+    cur.close()
+    conn.close()
+
+
+def record_scrape_success(username: str, platform: str) -> None:
+    """Reset a profile's consecutive-failure count after a good scrape."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE profiles SET consecutive_failures = 0 WHERE username = %s AND platform = %s",
+        (username, platform),
+    )
+    conn.commit()
+    cur.close()
+    conn.close()
+
+
 def migrate_bignum_columns():
     """Widen engagement counters to BIGINT for existing databases.
 
@@ -447,6 +519,10 @@ def migrate_indexes():
         CREATE INDEX IF NOT EXISTS idx_posts_profile_id ON posts(profile_id);
         CREATE INDEX IF NOT EXISTS idx_posts_viral_score ON posts(viral_score DESC);
         CREATE INDEX IF NOT EXISTS idx_posts_posted_at ON posts(posted_at DESC);
+        -- Hook Lab feed: sort by viral_score over analyzed posts only.
+        CREATE INDEX IF NOT EXISTS idx_posts_analyzed_viral ON posts(viral_score DESC) WHERE analyzed_at IS NOT NULL;
+        -- Hook Lab JSONB facet filters (hook_type / niche / emotional_trigger / ...).
+        CREATE INDEX IF NOT EXISTS idx_posts_hook_analysis_gin ON posts USING GIN (hook_analysis);
     """)
     conn.commit()
     cur.close()
@@ -472,11 +548,6 @@ def migrate_hook_columns():
             expires_at TIMESTAMPTZ NOT NULL
         )
     """)
-    cur.execute("""
-        CREATE UNIQUE INDEX IF NOT EXISTS user_hooks_user_template_key
-          ON user_hooks(user_id, canonical_template)
-          WHERE canonical_template IS NOT NULL
-    """)
     conn.commit()
     cur.close()
     conn.close()
@@ -499,8 +570,18 @@ def get_unanalyzed_viral_posts(threshold: float = 1.5, limit: int = 10) -> list[
          FROM posts p JOIN profiles pr ON p.profile_id = pr.id
          WHERE p.viral_score >= %s AND p.analyzed_at IS NULL
                AND (p.hook_analysis IS NULL OR p.hook_analysis != '{"status": "pending"}')
-               AND (p.hook_analysis->>'status' IS DISTINCT FROM 'failed'
-                    OR COALESCE((p.hook_analysis->>'attempts')::int, 0) < %s)
+               AND (
+                    p.hook_analysis->>'status' IS DISTINCT FROM 'failed'
+                    OR COALESCE((p.hook_analysis->>'attempts')::int, 0) < %s
+                    -- A transient failure (LLM/infra blip) recovers after a cooldown
+                    -- so an outage doesn't exclude the post forever. Deterministic
+                    -- failures (no_url/too_long) never come back.
+                    OR (
+                        COALESCE(p.hook_analysis->>'reason','') NOT IN ('no_url','too_long')
+                        AND COALESCE((p.hook_analysis->>'failed_at')::timestamptz, 'epoch'::timestamptz)
+                            < NOW() - INTERVAL '6 hours'
+                    )
+               )
          ORDER BY p.viral_score DESC LIMIT %s)
         ORDER BY priority, viral_score DESC
         LIMIT %s
@@ -581,8 +662,10 @@ def mark_analysis_failed(post_id: int, attempts: int, reason: str = ""):
     """
     conn = get_conn()
     cur = conn.cursor()
+    # Stamp failed_at with the DB clock so the transient-failure cooldown in
+    # get_unanalyzed_viral_posts can let the post recover after an outage.
     cur.execute(
-        "UPDATE posts SET hook_analysis = %s WHERE id = %s",
+        "UPDATE posts SET hook_analysis = (%s::jsonb || jsonb_build_object('failed_at', NOW())) WHERE id = %s",
         (json.dumps(failure_marker(attempts, reason)), post_id),
     )
     conn.commit()
@@ -596,10 +679,15 @@ def pop_scrape_queue() -> Optional[tuple]:
     """
     conn = get_conn()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    # FOR UPDATE SKIP LOCKED makes the claim safe for concurrent workers: each
+    # transaction skips rows another worker has already locked, so no two workers
+    # ever claim the same queue entry (required before running a worker pool).
     cur.execute("""
         UPDATE scrape_queue SET status='in_progress', started_at=NOW()
         WHERE id = (
-            SELECT id FROM scrape_queue WHERE status='pending' ORDER BY id LIMIT 1
+            SELECT id FROM scrape_queue WHERE status='pending'
+            ORDER BY id LIMIT 1
+            FOR UPDATE SKIP LOCKED
         )
         RETURNING id, profile_id
     """)
@@ -619,6 +707,77 @@ def pop_scrape_queue() -> Optional[tuple]:
     if not profile:
         return None
     return (queue_id, profile['username'], profile['platform'])
+
+
+def generate_niche_digest_notifications() -> int:
+    """In-app 'new hooks in your niche' digest (closes the one-way value loop).
+
+    For each user with a niche, if fresh hooks were analyzed in that niche in the
+    last day, create one deduped 'niche_digest' notification per user per day.
+    Uses the existing notifications system (no email needed). Returns count created.
+    """
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute("""
+        SELECT user_id, niche FROM creator_profiles
+        WHERE niche IS NOT NULL AND niche <> ''
+    """)
+    users = cur.fetchall()
+
+    count = 0
+    ins = conn.cursor()
+    for u in users:
+        cur.execute("""
+            SELECT COUNT(*) AS n FROM posts
+            WHERE analyzed_at > NOW() - INTERVAL '1 day'
+              AND hook_analysis->>'niche' = %s
+        """, (u['niche'],))
+        n = cur.fetchone()['n']
+        if not n:
+            continue
+        title = f"{n} new hooks in {u['niche']}"
+        body = f"We analyzed {n} fresh viral hooks in your niche. See what's working."
+        link = f"/dashboard/hook-lab?niche={u['niche']}"
+        ins.execute("""
+            INSERT INTO notifications (user_id, type, title, body, link)
+            SELECT %s, 'niche_digest', %s, %s, %s
+            WHERE NOT EXISTS (
+                SELECT 1 FROM notifications
+                WHERE user_id = %s AND type = 'niche_digest' AND DATE(created_at) = CURRENT_DATE
+            )
+        """, (u['user_id'], title, body, link, u['user_id']))
+        count += ins.rowcount
+
+    conn.commit()
+    ins.close()
+    cur.close()
+    conn.close()
+    return count
+
+
+def get_scrape_debt(sla_seconds: int) -> int:
+    """Count active profiles past their refresh SLA — the scrape backlog.
+
+    Rising debt means one daemon can't keep up with the 4h freshness promise
+    (the silent failure mode), so the daemon alerts when this crosses a threshold.
+    Excludes reaped (dead) profiles since we've intentionally stopped scraping them.
+    """
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT COUNT(*) FROM profiles pr
+        WHERE pr.consecutive_failures < %s
+        AND (
+            EXISTS (SELECT 1 FROM seed_creators sc
+                    WHERE sc.username = pr.username AND sc.platform = pr.platform AND sc.is_active = TRUE)
+            OR EXISTS (SELECT 1 FROM user_tracked_profiles utp WHERE utp.profile_id = pr.id)
+        )
+        AND (pr.last_scraped_at IS NULL OR pr.last_scraped_at < NOW() - make_interval(secs => %s))
+    """, (REAP_THRESHOLD, sla_seconds))
+    n = cur.fetchone()[0]
+    cur.close()
+    conn.close()
+    return n
 
 
 def reclaim_stale_queue_entries(max_age_minutes: int = 15) -> int:
@@ -806,33 +965,43 @@ def get_active_profiles() -> list[dict]:
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute("""
         SELECT DISTINCT pr.* FROM profiles pr
-        WHERE EXISTS (
-            SELECT 1 FROM seed_creators sc
-            WHERE sc.username = pr.username AND sc.platform = pr.platform AND sc.is_active = TRUE
-        )
-        OR EXISTS (
-            SELECT 1 FROM user_tracked_profiles utp WHERE utp.profile_id = pr.id
+        WHERE pr.consecutive_failures < %s
+        AND (
+            EXISTS (
+                SELECT 1 FROM seed_creators sc
+                WHERE sc.username = pr.username AND sc.platform = pr.platform AND sc.is_active = TRUE
+            )
+            OR EXISTS (
+                SELECT 1 FROM user_tracked_profiles utp WHERE utp.profile_id = pr.id
+            )
         )
         ORDER BY pr.last_scraped_at ASC NULLS FIRST
-    """)
+    """, (REAP_THRESHOLD,))
     rows = cur.fetchall()
     cur.close()
     conn.close()
     return [dict(r) for r in rows]
 
 
-def recalculate_viral_scores(profile_id: int):
-    """Recalculate viral_score for ALL posts of a profile based on avg engagement."""
+def recalculate_viral_scores(profile_id: int) -> int:
+    """Recalculate viral_score for a profile's posts. Returns rows actually changed.
+
+    The IS DISTINCT FROM guard skips no-op writes so a 500-post creator doesn't
+    rewrite 500 rows (+ index churn + dead tuples) every 4h when nothing changed.
+    """
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
-        UPDATE posts SET viral_score = ROUND(((likes + comments)::numeric / avg_eng), 2)
+        UPDATE posts SET viral_score = ROUND(((posts.likes + posts.comments)::numeric / sub.avg_eng), 2)
         FROM (SELECT AVG(likes + comments) AS avg_eng FROM posts WHERE profile_id = %s AND (likes + comments) > 0) sub
-        WHERE profile_id = %s AND (likes + comments) > 0 AND sub.avg_eng > 0
+        WHERE posts.profile_id = %s AND (posts.likes + posts.comments) > 0 AND sub.avg_eng > 0
+          AND ROUND(posts.viral_score::numeric, 2) IS DISTINCT FROM ROUND(((posts.likes + posts.comments)::numeric / sub.avg_eng), 2)
     """, (profile_id, profile_id))
+    changed = cur.rowcount
     conn.commit()
     cur.close()
     conn.close()
+    return changed
 
 
 def backfill_hook_patterns():
@@ -992,4 +1161,5 @@ if DATABASE_URL:
     migrate_hook_columns()
     migrate_audio_columns()
     migrate_bignum_columns()
+    migrate_failure_columns()
     migrate_indexes()

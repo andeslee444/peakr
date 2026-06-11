@@ -1,10 +1,11 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import { isAnalyzed } from '@/lib/scrape-status';
 import { useParams } from 'next/navigation';
 import Image from 'next/image';
 import Link from 'next/link';
-import { formatNumber, formatViralScore, proxyImg } from '@/lib/format';
+import { formatNumber, formatViralScore, proxyImg, formatFreshness } from '@/lib/format';
 import type { Post, HookAnalysis } from '@/lib/types';
 import { HookTypeBadge } from '@/components/HookBadge';
 import InsightsPanel from '@/components/InsightsPanel';
@@ -64,7 +65,7 @@ export default function CreatorPage() {
   useEffect(() => { fetchData(); }, [fetchData]);
 
   const filteredPosts = tab === 'analyzed'
-    ? posts.filter(p => p.hook_analysis)
+    ? posts.filter(isAnalyzed)
     : posts;
 
   // Viral score distribution buckets
@@ -127,6 +128,9 @@ export default function CreatorPage() {
             {(profile.display_name as string) && (
               <p className="text-gray-500 text-sm">{profile.display_name as string}</p>
             )}
+            <p className="text-gray-400 text-xs mt-0.5">
+              {formatFreshness(profile.last_scraped_at as string | null, Date.now(), { staleAfterMs: 4 * 3600_000 })}
+            </p>
             {(profile.bio as string) && (
               <p className="text-gray-600 text-sm mt-1 line-clamp-2">{profile.bio as string}</p>
             )}
@@ -222,7 +226,7 @@ export default function CreatorPage() {
               onClick={() => setTab('analyzed')}
               className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${tab === 'analyzed' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500'}`}
             >
-              Analyzed ({posts.filter(p => p.hook_analysis).length})
+              Analyzed ({posts.filter(isAnalyzed).length})
             </button>
           </div>
         </div>
@@ -258,7 +262,7 @@ export default function CreatorPage() {
                     </div>
                   )}
                   {/* Analyzed indicator */}
-                  {post.hook_analysis && (
+                  {isAnalyzed(post) && (
                     <div className="absolute top-1.5 right-1.5 w-5 h-5 bg-indigo-500 text-white rounded-full flex items-center justify-center z-10">
                       <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
@@ -273,7 +277,7 @@ export default function CreatorPage() {
                   )}
                 </div>
                 {/* Hook template preview */}
-                {post.hook_analysis && (
+                {isAnalyzed(post) && (
                   <p className="text-[10px] text-gray-500 mt-1 line-clamp-2 px-0.5">
                     {(post.hook_analysis as HookAnalysis).hook_template || (post.hook_analysis as HookAnalysis).hook_type}
                   </p>

@@ -39,7 +39,8 @@ def _get_cookie_file() -> Optional[str]:
 def download_video(post_url: str, output_path: str) -> bool:
     """Download a video using yt-dlp. Returns True on success."""
     try:
-        cmd = ["yt-dlp", "-o", output_path, "--no-playlist"]
+        from scraper.proxy import ytdlp_proxy_args
+        cmd = ["yt-dlp", "-o", output_path, "--no-playlist", *ytdlp_proxy_args()]
         cookie_file = _get_cookie_file()
         if cookie_file:
             cmd.extend(["--cookies", cookie_file])
@@ -95,11 +96,16 @@ def extract_keyframes(video_path: str, output_dir: str, duration: float = 5.0, c
 
 
 def transcribe_audio(audio_path: str) -> Optional[str]:
-    """Transcribe audio using either local Whisper or OpenAI API."""
-    if WHISPER_MODE == "api":
+    """Transcribe audio using either local Whisper or the OpenAI API.
+
+    Mode is read at call time so it can be flipped via WHISPER_MODE=api without a
+    restart. The API path (~$0.006/min) unblocks the analysis backlog without a
+    GPU — local CPU Whisper runs ~real-time and bottlenecks the single daemon.
+    """
+    mode = os.environ.get("WHISPER_MODE", WHISPER_MODE)
+    if mode == "api":
         return _transcribe_api(audio_path)
-    else:
-        return _transcribe_local(audio_path)
+    return _transcribe_local(audio_path)
 
 
 def _transcribe_local(audio_path: str) -> Optional[str]:

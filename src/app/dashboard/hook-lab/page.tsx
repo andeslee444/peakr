@@ -4,7 +4,8 @@ import { useState, useCallback, useEffect } from 'react';
 import type { Post, HookAnalysis } from '@/lib/types';
 import { formatNumber, formatViralScore } from '@/lib/format';
 import HookCard from '@/components/HookCard';
-import HookFilters, { DEFAULT_FILTERS, type HookFilterState } from '@/components/HookFilters';
+import HookFilters, { DEFAULT_FILTERS, hasActiveFilters, type HookFilterState } from '@/components/HookFilters';
+import Link from 'next/link';
 import HookStats from '@/components/HookStats';
 import InsightsPanel from '@/components/InsightsPanel';
 
@@ -62,6 +63,14 @@ export default function HookLabPage() {
   const [compareMode, setCompareMode] = useState(false);
   const [comparePosts, setComparePosts] = useState<Post[]>([]);
   const [showComparePanel, setShowComparePanel] = useState(false);
+
+  // Esc closes the comparison modal (keyboard accessibility).
+  useEffect(() => {
+    if (!showComparePanel) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setShowComparePanel(false); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [showComparePanel]);
 
   const toggleCompare = (post: Post) => {
     setComparePosts(prev => {
@@ -334,10 +343,26 @@ export default function HookLabPage() {
           <span className="text-6xl">🪝</span>
           <h3 className="mt-4 text-lg font-semibold text-gray-900">No hooks found</h3>
           <p className="mt-2 text-gray-600">
-            {filters.analyzed_only
-              ? 'No analyzed posts match your filters. Try clearing filters or wait for more posts to be analyzed.'
-              : 'Track some profiles and the scraper will start analyzing hooks automatically.'}
+            {hasActiveFilters(filters)
+              ? 'No hooks match your current filters.'
+              : 'Track some accounts and the scraper will start analyzing their hooks automatically.'}
           </p>
+          <div className="mt-5 flex items-center justify-center gap-3">
+            {hasActiveFilters(filters) && (
+              <button
+                onClick={() => { setFilters(DEFAULT_FILTERS); setNicheSource(null); }}
+                className="px-5 py-2.5 bg-indigo-600 text-white rounded-xl text-sm font-medium hover:bg-indigo-700 transition-colors"
+              >
+                Clear filters
+              </button>
+            )}
+            <Link
+              href="/dashboard/tracked"
+              className="px-5 py-2.5 border border-gray-200 text-gray-700 rounded-xl text-sm font-medium hover:bg-gray-50 transition-colors"
+            >
+              Track accounts
+            </Link>
+          </div>
         </div>
       ) : (
         <>
@@ -409,7 +434,7 @@ export default function HookLabPage() {
             {comparePosts.map(p => (
               <div key={p.id} className="flex items-center gap-1 bg-indigo-50 rounded-lg px-2 py-1">
                 <span className="text-xs font-medium text-indigo-700 truncate max-w-[100px]">@{p.username}</span>
-                <button onClick={() => toggleCompare(p)} className="text-indigo-400 hover:text-indigo-600">
+                <button onClick={() => toggleCompare(p)} aria-label={`Remove @${p.username} from comparison`} className="text-indigo-400 hover:text-indigo-600">
                   <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                   </svg>
@@ -432,12 +457,22 @@ export default function HookLabPage() {
 
       {/* Comparison panel */}
       {showComparePanel && comparePosts.length >= 2 && (
-        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-5xl max-h-[90vh] overflow-y-auto">
+        <div
+          className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Hook comparison"
+          onClick={() => setShowComparePanel(false)}
+        >
+          <div
+            className="bg-white rounded-2xl shadow-2xl w-full max-w-5xl max-h-[90vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 sticky top-0 bg-white z-10 rounded-t-2xl">
               <h2 className="text-lg font-bold text-gray-900">Hook Comparison</h2>
               <button
                 onClick={() => setShowComparePanel(false)}
+                aria-label="Close comparison"
                 className="p-2 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100"
               >
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">

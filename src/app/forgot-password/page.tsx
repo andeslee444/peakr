@@ -14,12 +14,21 @@ export default function ForgotPasswordPage() {
     setError('');
     setIsLoading(true);
     try {
-      await fetch('/api/auth/forgot-password', {
+      const res = await fetch('/api/auth/forgot-password', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email }),
       });
-      // Always show the same confirmation regardless of whether the email exists.
+      const data = await res.json().catch(() => ({}));
+      // Don't claim a link was sent if delivery is unavailable.
+      if (res.status === 503 || data?.available === false) {
+        setError(
+          data?.message ||
+            'Password reset is temporarily unavailable. Please contact support.'
+        );
+        return;
+      }
+      // Otherwise show the same confirmation regardless of whether the email exists.
       setSent(true);
     } catch {
       setError('Something went wrong. Please try again.');

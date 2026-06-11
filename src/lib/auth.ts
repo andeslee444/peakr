@@ -5,6 +5,8 @@ import bcrypt from 'bcryptjs';
 import { getPool } from './db';
 import { normalizeEmail } from './auth-validation';
 import { rateLimit } from './rate-limit';
+import { normalizePlan } from './plan';
+import { shapeSession, sessionStillValid } from './auth-callbacks';
 
 export const { handlers, signIn, signOut, auth } = NextAuth({
   trustHost: true,
@@ -112,16 +114,41 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         token.userId = Number(user.id);
         token.username = user.name || user.email;
       }
+      // On login (account present), stamp the live plan + token version once so
+      // the client can gate UI without an extra round-trip. Enforcement still
+      // reads the live plan server-side, so a later upgrade isn't blocked.
+      if (account && token.userId) {
+        const pool = getPool();
+        const { rows: [u] } = await pool.query('SELECT plan, token_version FROM users WHERE id = $1', [token.userId]);
+        token.plan = normalizePlan(u?.plan);
+        token.tokenVersion = Number(u?.token_version ?? 0);
+        // Stamp onboarding status so the dashboard can skip a per-load fetch+flash.
+        try {
+          const { rows: [cp] } = await pool.query(
+            "SELECT onboarding_step FROM creator_profiles WHERE user_id = $1",
+            [token.userId]
+          );
+          token.onboardingComplete = cp?.onboarding_step === 'complete';
+        } catch {
+          token.onboardingComplete = false;
+        }
+      } else if (token.userId) {
+        // Subsequent requests: revoke the session if the password changed since
+        // this token was issued (token_version bumped on change/reset).
+        try {
+          const pool = getPool();
+          const { rows: [u] } = await pool.query('SELECT token_version FROM users WHERE id = $1', [token.userId]);
+          if (u && !sessionStillValid(token.tokenVersion, u.token_version)) {
+            delete token.userId;
+          }
+        } catch {
+          // On a transient DB error, don't lock the user out — keep the session.
+        }
+      }
       return token;
     },
     async session({ session, token }) {
-      if (token.userId) {
-        session.user.id = String(token.userId);
-      }
-      if (token.username) {
-        session.user.name = token.username as string;
-      }
-      return session;
+      return shapeSession(session, token);
     },
   },
 });

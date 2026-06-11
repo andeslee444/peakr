@@ -6,6 +6,11 @@ Pure logic; the daemon keeps the per-profile failure counts in memory.
 BASE_BACKOFF_S = 300          # 5 minutes after the first failure
 MAX_BACKOFF_S = 6 * 3600      # cap at 6 hours
 
+# After this many consecutive failures a profile is considered dead (deleted /
+# private / banned) and is reaped from the active scrape set instead of being
+# retried forever. Persisted on the profile row so a restart doesn't forget.
+REAP_THRESHOLD = 10
+
 
 def backoff_seconds(failures: int) -> float:
     """How long to wait before retrying after `failures` consecutive failures."""

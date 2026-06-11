@@ -4,13 +4,27 @@ import { NextResponse } from 'next/server';
  * Fixed-window in-memory rate limiter.
  *
  * NOTE: state is per-process, so on Vercel each serverless instance has its own
- * counters. This still meaningfully throttles bursts from a single client and is
- * a reasonable launch baseline. For strict global limits across instances, back
- * this with a shared store (e.g. Upstash Redis) — the call sites can stay the
- * same.
+ * counters — the effective limit is roughly (configured limit × warm instances).
+ * This still meaningfully throttles bursts from a single client and is a
+ * reasonable launch baseline. For strict GLOBAL limits (login/signup brute-force),
+ * back this with a shared store: provision Vercel KV / Upstash Redis and replace
+ * the `store` Map operations with KV calls — `rateLimit` is the single chokepoint,
+ * so no call site changes. Expired buckets are pruned (see PRUNE_THRESHOLD) so the
+ * in-memory store can't grow unbounded under a flood of unique IPs.
  */
 type Bucket = { count: number; resetAt: number };
 const store = new Map<string, Bucket>();
+
+// Above this many tracked keys, sweep expired buckets so a flood of unique IPs
+// can't grow the Map without bound (the buckets are otherwise only overwritten
+// when the same key is seen again).
+const PRUNE_THRESHOLD = 256;
+
+function pruneExpired(now: number): void {
+  for (const [key, bucket] of store) {
+    if (now >= bucket.resetAt) store.delete(key);
+  }
+}
 
 export interface RateLimitResult {
   allowed: boolean;
@@ -24,6 +38,7 @@ export function rateLimit(
   windowMs: number,
   now: number = Date.now()
 ): RateLimitResult {
+  if (store.size > PRUNE_THRESHOLD) pruneExpired(now);
   const bucket = store.get(key);
   if (!bucket || now >= bucket.resetAt) {
     const resetAt = now + windowMs;
@@ -40,6 +55,11 @@ export function rateLimit(
 /** Clears all counters. Test-only helper. */
 export function resetRateLimitStore(): void {
   store.clear();
+}
+
+/** Number of tracked buckets (for tests / introspection). */
+export function rateLimitStoreSize(): number {
+  return store.size;
 }
 
 /** Build a per-client key from the forwarded IP, scoped by route. */

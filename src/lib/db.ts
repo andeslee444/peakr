@@ -120,6 +120,8 @@ async function initSchema() {
     ALTER TABLE posts ADD COLUMN IF NOT EXISTS hook_analysis JSONB;
     ALTER TABLE posts ADD COLUMN IF NOT EXISTS analyzed_at TIMESTAMPTZ;
     ALTER TABLE profiles ADD COLUMN IF NOT EXISTS primary_niche TEXT;
+    ALTER TABLE profiles ADD COLUMN IF NOT EXISTS consecutive_failures INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE profiles ADD COLUMN IF NOT EXISTS last_scrape_failed_at TIMESTAMPTZ;
     ALTER TABLE posts ADD COLUMN IF NOT EXISTS keyframe_base64 TEXT;
     ALTER TABLE posts ADD COLUMN IF NOT EXISTS s3_thumbnail_url TEXT;
     ALTER TABLE posts ADD COLUMN IF NOT EXISTS audio_name TEXT;
@@ -212,32 +214,9 @@ async function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_utp_user_id ON user_tracked_profiles(user_id);
     CREATE INDEX IF NOT EXISTS idx_utp_profile_id ON user_tracked_profiles(profile_id);
   `);
-  // User hooks (pattern-based saves) and examples
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS user_hooks (
-      id SERIAL PRIMARY KEY,
-      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      canonical_template TEXT,
-      display_name TEXT,
-      hook_type TEXT,
-      niche TEXT,
-      notes TEXT,
-      created_at TIMESTAMPTZ DEFAULT NOW(),
-      updated_at TIMESTAMPTZ DEFAULT NOW()
-    );
-
-    CREATE UNIQUE INDEX IF NOT EXISTS user_hooks_user_template_key
-      ON user_hooks(user_id, canonical_template)
-      WHERE canonical_template IS NOT NULL;
-
-    CREATE TABLE IF NOT EXISTS user_hook_examples (
-      id SERIAL PRIMARY KEY,
-      user_hook_id INTEGER NOT NULL REFERENCES user_hooks(id) ON DELETE CASCADE,
-      post_id INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
-      added_at TIMESTAMPTZ DEFAULT NOW(),
-      UNIQUE(user_hook_id, post_id)
-    );
-  `);
+  // NOTE: the legacy user_hooks / user_hook_examples tables were removed — the
+  // live "My Hooks" feature uses hook_patterns + user_saved_patterns below. Any
+  // pre-existing empty tables in older databases are harmless and left in place.
   // Global hook patterns (system-wide grouping + analytics)
   await pool.query(`
     CREATE TABLE IF NOT EXISTS hook_patterns (
@@ -297,6 +276,27 @@ async function initSchema() {
   await pool.query(`
     ALTER TABLE users ADD COLUMN IF NOT EXISTS plan TEXT NOT NULL DEFAULT 'free';
     ALTER TABLE users ADD COLUMN IF NOT EXISTS stripe_customer_id TEXT;
+    -- Bumped on password change to revoke existing JWTs.
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS token_version INTEGER NOT NULL DEFAULT 0;
+  `);
+  // AI-generated hooks, persisted so they survive refresh/navigation.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS generated_hooks (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      topic TEXT,
+      hooks JSONB NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_generated_hooks_user ON generated_hooks(user_id, created_at DESC);
+  `);
+  // Webhook idempotency: every processed Stripe event id is recorded so a
+  // replayed/duplicated event is a no-op.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS stripe_events (
+      event_id TEXT PRIMARY KEY,
+      received_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
   `);
   // Password reset tokens (only the SHA-256 hash is stored)
   await pool.query(`
@@ -369,6 +369,10 @@ async function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_posts_profile_id ON posts(profile_id);
     CREATE INDEX IF NOT EXISTS idx_posts_viral_score ON posts(viral_score DESC);
     CREATE INDEX IF NOT EXISTS idx_posts_posted_at ON posts(posted_at DESC);
+    -- Hook Lab feed: sort by viral_score over analyzed posts only.
+    CREATE INDEX IF NOT EXISTS idx_posts_analyzed_viral ON posts(viral_score DESC) WHERE analyzed_at IS NOT NULL;
+    -- Hook Lab JSONB facet filters (hook_type / niche / emotional_trigger / ...).
+    CREATE INDEX IF NOT EXISTS idx_posts_hook_analysis_gin ON posts USING GIN (hook_analysis);
   `);
   _schemaInitialized = true;
 }
