@@ -38,6 +38,39 @@ export default function AccountPage() {
   const [pwError, setPwError] = useState('');
   const [pwSuccess, setPwSuccess] = useState('');
 
+  // Billing actions
+  const [billingBusy, setBillingBusy] = useState(false);
+  const startCheckout = async (billingPeriod: 'monthly' | 'annual') => {
+    setBillingBusy(true);
+    try {
+      const res = await fetch('/api/billing/checkout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ plan: billingPeriod }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.url) { window.location.href = data.url; return; }
+      alert(data.error || 'Billing is not available yet. Please try again later.');
+    } catch {
+      alert('Something went wrong starting checkout.');
+    } finally {
+      setBillingBusy(false);
+    }
+  };
+  const manageSubscription = async () => {
+    setBillingBusy(true);
+    try {
+      const res = await fetch('/api/billing/portal', { method: 'POST' });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.url) { window.location.href = data.url; return; }
+      alert(data.error || 'Could not open the billing portal.');
+    } catch {
+      alert('Something went wrong opening the billing portal.');
+    } finally {
+      setBillingBusy(false);
+    }
+  };
+
   const [deleting, setDeleting] = useState(false);
   const handleDeleteAccount = async () => {
     if (!window.confirm('Permanently delete your account and all your data? This cannot be undone.')) {
@@ -212,6 +245,33 @@ export default function AccountPage() {
             </div>
           </div>
         </div>
+
+        {plan === 'pro' ? (
+          <button
+            onClick={manageSubscription}
+            disabled={billingBusy}
+            className="w-full border border-gray-200 text-gray-700 font-semibold py-2.5 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-60"
+          >
+            {billingBusy ? 'Opening…' : 'Manage subscription'}
+          </button>
+        ) : (
+          <div className="grid grid-cols-2 gap-3">
+            <button
+              onClick={() => startCheckout('monthly')}
+              disabled={billingBusy}
+              className="border border-indigo-200 text-indigo-700 font-semibold py-2.5 rounded-lg hover:bg-indigo-50 transition-colors disabled:opacity-60"
+            >
+              Upgrade monthly
+            </button>
+            <button
+              onClick={() => startCheckout('annual')}
+              disabled={billingBusy}
+              className="gradient-bg text-white font-semibold py-2.5 rounded-lg hover:opacity-90 transition-opacity disabled:opacity-60"
+            >
+              Upgrade annual · save 60%
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Danger zone */}

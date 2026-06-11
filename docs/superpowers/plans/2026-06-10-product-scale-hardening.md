@@ -16,14 +16,14 @@
 - [x] **1.4 `keyframe` open-redirect** — validate `thumbnail_url` against `INSTAGRAM_IMAGE_HOSTS` (reuse ssrf allowlist) before 302, else 404/route via image-proxy. Test: disallowed host → not redirected.
 - [x] **1.5 analyze-hook reopen double-burns daily quota** — the `already_analyzed` short-circuit is gated on `analyzed_at` (still null while pending), so re-requesting a queued post re-charges the cap. Gate on pending/queued state too. Test: second request for a queued post does not increment usage.
 
-## Wave 2 — Monetization (highest leverage)
+## Wave 2 — Monetization (highest leverage) ✅ DONE
 
 - [x] **2.1 Carry `plan` in JWT** — extend `SELECT` in `auth.ts` session/jwt callback; expose `session.user.plan`. Test: jwt callback attaches plan.
 - [x] **2.2 Enforce track limit in `/api/track`** — `COUNT user_tracked_profiles`; reject with 402 at `>= trackLimit(plan)`; wire `src/lib/plan.ts` (currently dead). Test: free user at limit → 402; pro allowed.
 - [x] **2.3 Reconcile limit numbers** — one source of truth (`plan.ts`); fix account page (15) + `Pricing.tsx` (15/50) to match. Test: Pricing copy derives from plan constants.
 - [x] **2.4 Gate costly actions behind `isPro()`** — `/api/export` + AI generation volume; return 402 with upgrade hint. Test: free export blocked or metered.
 - [x] **2.5 Upgrade banner + checkout guard** — banner hidden when `plan==='pro'`; checkout rejects already-pro. Test: layout gate; checkout 409 when pro.
-- [ ] **2.6 Account page reflects real plan + self-serve cancel** — Stripe Customer Portal route; annual reachable from upgrade. Test: portal route requires auth + customer id.
+- [x] **2.6 Account page reflects real plan + self-serve cancel** — Stripe Customer Portal route; annual reachable from upgrade. Test: portal route requires auth + customer id.
 
 ## Wave 3 — Billing robustness
 
