@@ -75,7 +75,7 @@
 - [x] **8.5 Land-in-Hook-Lab onboarding**.
 - [x] **8.6 Hook Lab empty-state CTA / clear-niche**.
 - [ ] **8.7 Value loop: track own handle + weekly digest**.
-- [ ] **8.8 Persist generated hooks/remixes**.
+- [x] **8.8 Persist generated hooks/remixes**.
 - [x] **8.9 Per-profile freshness rendering**.
 
 ---

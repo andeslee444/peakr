@@ -279,6 +279,17 @@ async function initSchema() {
     -- Bumped on password change to revoke existing JWTs.
     ALTER TABLE users ADD COLUMN IF NOT EXISTS token_version INTEGER NOT NULL DEFAULT 0;
   `);
+  // AI-generated hooks, persisted so they survive refresh/navigation.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS generated_hooks (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      topic TEXT,
+      hooks JSONB NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_generated_hooks_user ON generated_hooks(user_id, created_at DESC);
+  `);
   // Webhook idempotency: every processed Stripe event id is recorded so a
   // replayed/duplicated event is a no-op.
   await pool.query(`
