@@ -111,6 +111,13 @@ def scrape_seed_list(creators: list, tag: str = "SEED"):
         if not running:
             break
 
+        # Beat from inside the batch — a multi-hour seed scrape would otherwise
+        # starve the main-loop heartbeat and trip a false /api/worker-status down.
+        try:
+            record_heartbeat(WORKER_ID)
+        except Exception:
+            pass
+
         # Yield to any user-triggered tracks before continuing the seed batch.
         drain_scrape_queue()
 
