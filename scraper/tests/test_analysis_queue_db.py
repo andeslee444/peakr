@@ -31,10 +31,11 @@ def _insert_post(conn, profile_id, platform_id, viral_score, hook_analysis, anal
 
 
 @pytest.mark.db
-def test_get_unanalyzed_excludes_terminal_failures(scraper_db, db_conn):
+def test_get_unanalyzed_excludes_deterministic_failures(scraper_db, db_conn):
     profile_id = _insert_profile(db_conn)
     pending = _insert_post(db_conn, profile_id, "a", 0.5, {"status": "pending"})
-    terminal = _insert_post(db_conn, profile_id, "b", 9.0, {"status": "failed", "attempts": 3})
+    # Deterministic failure (no_url) can never succeed -> stays excluded.
+    deterministic = _insert_post(db_conn, profile_id, "b", 9.0, {"status": "failed", "attempts": 3, "reason": "no_url"})
     retryable = _insert_post(db_conn, profile_id, "c", 9.0, {"status": "failed", "attempts": 1})
     fresh = _insert_post(db_conn, profile_id, "d", 9.0, None)
 
@@ -43,7 +44,28 @@ def test_get_unanalyzed_excludes_terminal_failures(scraper_db, db_conn):
     assert pending in ids            # queued posts are always picked up
     assert fresh in ids              # never-attempted viral posts are picked up
     assert retryable in ids          # below max attempts -> retried
-    assert terminal not in ids       # terminal failures are NOT re-selected
+    assert deterministic not in ids  # deterministic failures are NOT re-selected
+
+
+@pytest.mark.db
+def test_transient_failures_recover_after_cooldown(scraper_db, db_conn):
+    """A maxed-out *transient* failure (e.g. the LLM was down) must come back
+    into the pool after a cooldown, so an outage doesn't erase posts forever."""
+    profile_id = _insert_profile(db_conn, username="recov")
+    recovered = _insert_post(db_conn, profile_id, "r1", 9.0,
+                             {"status": "failed", "attempts": 3, "reason": "exception",
+                              "failed_at": "2026-01-01T00:00:00Z"})  # long ago
+    cooling = _insert_post(db_conn, profile_id, "r2", 9.0,
+                           {"status": "failed", "attempts": 3, "reason": "exception"})
+    # Give "cooling" a very recent failed_at so it's still within the cooldown.
+    with db_conn.cursor() as cur:
+        cur.execute("UPDATE posts SET hook_analysis = hook_analysis || jsonb_build_object('failed_at', NOW()) WHERE id = %s", (cooling,))
+    db_conn.commit()
+
+    ids = {p["id"] for p in scraper_db.get_unanalyzed_viral_posts(threshold=1.5, limit=50)}
+
+    assert recovered in ids      # past the cooldown -> retryable again
+    assert cooling not in ids    # still cooling down -> not hammered every loop
 
 
 @pytest.mark.db

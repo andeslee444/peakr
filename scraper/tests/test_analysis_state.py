@@ -6,7 +6,42 @@ from scraper.analysis_state import (
     parse_attempts,
     failure_marker,
     is_terminal_failure,
+    classify_failure,
+    retry_cooldown_seconds,
+    TRANSIENT_RETRY_COOLDOWN_SECONDS,
+    TERMINAL_RETRY_COOLDOWN_SECONDS,
 )
+
+
+class TestClassifyFailure:
+    def test_deterministic_reasons(self):
+        assert classify_failure("no_url") == "deterministic"
+        assert classify_failure("too_long") == "deterministic"
+
+    def test_transient_reasons(self):
+        # An LLM/infra blip must NOT be treated as permanent.
+        assert classify_failure("analysis_empty") == "transient"
+        assert classify_failure("exception") == "transient"
+        assert classify_failure("") == "transient"
+
+
+class TestRetryCooldown:
+    def test_sub_max_uses_short_cooldown(self):
+        assert retry_cooldown_seconds(1) == TRANSIENT_RETRY_COOLDOWN_SECONDS
+
+    def test_maxed_out_uses_long_cooldown_but_not_forever(self):
+        cd = retry_cooldown_seconds(MAX_ANALYSIS_ATTEMPTS)
+        assert cd == TERMINAL_RETRY_COOLDOWN_SECONDS
+        assert cd > TRANSIENT_RETRY_COOLDOWN_SECONDS  # backs off, still finite
+
+
+class TestFailureMarkerTimestamp:
+    def test_failed_at_included_when_given(self):
+        m = failure_marker(2, reason="exception", failed_at="2026-06-10T00:00:00Z")
+        assert m["failed_at"] == "2026-06-10T00:00:00Z"
+
+    def test_failed_at_omitted_when_absent(self):
+        assert "failed_at" not in failure_marker(2, reason="exception")
 
 
 class TestSkipReason:

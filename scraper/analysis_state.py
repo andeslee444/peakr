@@ -18,6 +18,23 @@ DETERMINISTIC_SKIP_REASONS = ("no_url", "too_long")
 
 MAX_DURATION_SECONDS = 300
 
+# Transient failures (LLM/infra blips) must NOT be permanently terminal — a short
+# outage would otherwise erase a post from the analysis pool forever. They become
+# retry-eligible again after a cooldown, which backs off once the attempt cap is
+# hit but never goes infinite (so a recovered service eventually re-processes).
+TRANSIENT_RETRY_COOLDOWN_SECONDS = 60 * 60          # 1 hour between transient retries
+TERMINAL_RETRY_COOLDOWN_SECONDS = 6 * 60 * 60       # 6 hours after hitting the cap
+
+
+def classify_failure(reason: str) -> str:
+    """'deterministic' (never retry) vs 'transient' (retry after a cooldown)."""
+    return "deterministic" if reason in DETERMINISTIC_SKIP_REASONS else "transient"
+
+
+def retry_cooldown_seconds(attempts: int, max_attempts: int = MAX_ANALYSIS_ATTEMPTS) -> int:
+    """How long a transiently-failed post waits before it's eligible again."""
+    return TERMINAL_RETRY_COOLDOWN_SECONDS if attempts >= max_attempts else TRANSIENT_RETRY_COOLDOWN_SECONDS
+
 
 def skip_reason(post: dict) -> Optional[str]:
     """Return a deterministic reason this post cannot be analyzed, or None."""
@@ -42,9 +59,16 @@ def parse_attempts(hook_analysis) -> int:
         return 0
 
 
-def failure_marker(attempts: int, reason: str = "") -> dict:
-    """Build the JSONB marker written to a post when analysis fails."""
-    return {"status": "failed", "attempts": attempts, "reason": reason}
+def failure_marker(attempts: int, reason: str = "", failed_at: Optional[str] = None) -> dict:
+    """Build the JSONB marker written to a post when analysis fails.
+
+    ``failed_at`` (ISO timestamp) drives the transient-failure cooldown so a post
+    can recover after an outage instead of being excluded forever.
+    """
+    marker = {"status": "failed", "attempts": attempts, "reason": reason}
+    if failed_at is not None:
+        marker["failed_at"] = failed_at
+    return marker
 
 
 def is_terminal_failure(hook_analysis, max_attempts: int = MAX_ANALYSIS_ATTEMPTS) -> bool:

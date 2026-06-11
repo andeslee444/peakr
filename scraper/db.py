@@ -499,8 +499,18 @@ def get_unanalyzed_viral_posts(threshold: float = 1.5, limit: int = 10) -> list[
          FROM posts p JOIN profiles pr ON p.profile_id = pr.id
          WHERE p.viral_score >= %s AND p.analyzed_at IS NULL
                AND (p.hook_analysis IS NULL OR p.hook_analysis != '{"status": "pending"}')
-               AND (p.hook_analysis->>'status' IS DISTINCT FROM 'failed'
-                    OR COALESCE((p.hook_analysis->>'attempts')::int, 0) < %s)
+               AND (
+                    p.hook_analysis->>'status' IS DISTINCT FROM 'failed'
+                    OR COALESCE((p.hook_analysis->>'attempts')::int, 0) < %s
+                    -- A transient failure (LLM/infra blip) recovers after a cooldown
+                    -- so an outage doesn't exclude the post forever. Deterministic
+                    -- failures (no_url/too_long) never come back.
+                    OR (
+                        COALESCE(p.hook_analysis->>'reason','') NOT IN ('no_url','too_long')
+                        AND COALESCE((p.hook_analysis->>'failed_at')::timestamptz, 'epoch'::timestamptz)
+                            < NOW() - INTERVAL '6 hours'
+                    )
+               )
          ORDER BY p.viral_score DESC LIMIT %s)
         ORDER BY priority, viral_score DESC
         LIMIT %s
@@ -581,8 +591,10 @@ def mark_analysis_failed(post_id: int, attempts: int, reason: str = ""):
     """
     conn = get_conn()
     cur = conn.cursor()
+    # Stamp failed_at with the DB clock so the transient-failure cooldown in
+    # get_unanalyzed_viral_posts can let the post recover after an outage.
     cur.execute(
-        "UPDATE posts SET hook_analysis = %s WHERE id = %s",
+        "UPDATE posts SET hook_analysis = (%s::jsonb || jsonb_build_object('failed_at', NOW())) WHERE id = %s",
         (json.dumps(failure_marker(attempts, reason)), post_id),
     )
     conn.commit()
