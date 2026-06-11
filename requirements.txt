@@ -10,10 +10,14 @@ httpx                # HTTP client (hook analysis / OpenClaw gateway)
 # Pinned: TikTok/IG video resolution + transcription depend on yt-dlp, which
 # changes often. Update deliberately (and re-test scraping) rather than letting an
 # auto-update silently break the fleet.
-yt-dlp==2026.2.4
+yt-dlp==2026.6.9
+# ffmpeg: audio extraction + mlx-whisper both shell out to `ffmpeg`. Ship a
+# bundled binary so a fresh box needs no Homebrew/sudo — scraper/transcribe.py
+# (ensure_ffmpeg_on_path) exposes it on PATH automatically.
+imageio-ffmpeg==0.6.0
 # Transcription: GPU-accelerated Whisper on Apple Silicon (the Mac Mini is M-series).
 # Free + on-device, no API key. Marker keeps it off non-arm64 / non-macOS (CI).
-mlx-whisper; platform_system == "Darwin" and platform_machine == "arm64"
+mlx-whisper==0.4.3; platform_system == "Darwin" and platform_machine == "arm64"
 
 # Optional — error monitoring. Active only when SENTRY_DSN is set.
 sentry-sdk

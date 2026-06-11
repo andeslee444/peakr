@@ -1,6 +1,7 @@
 """Video download, audio extraction, keyframe extraction, and transcription."""
 
 import os
+import shutil
 import subprocess
 import tempfile
 import logging
@@ -8,6 +9,44 @@ from pathlib import Path
 from typing import Optional
 
 log = logging.getLogger("peakr-transcribe")
+
+
+def ensure_ffmpeg_on_path() -> Optional[str]:
+    """Guarantee an ``ffmpeg`` binary is discoverable on PATH (idempotent).
+
+    Prefers a system ffmpeg (Homebrew etc.); otherwise exposes the pip-bundled
+    imageio-ffmpeg binary under the plain name ``ffmpeg`` in a cache dir and
+    prepends it to PATH. This makes the scraper self-bootstrapping from
+    requirements.txt alone — no Homebrew, sudo, or manual symlink needed for
+    audio extraction / mlx-whisper (both of which shell out to ``ffmpeg``).
+    Returns the resolved ffmpeg path, or None if nothing is available.
+    """
+    existing = shutil.which("ffmpeg")
+    if existing:
+        return existing
+    try:
+        import imageio_ffmpeg
+        exe = imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception as e:  # not installed / failed to resolve
+        log.warning(f"ffmpeg not on PATH and imageio-ffmpeg unavailable: {e}")
+        return None
+    bindir = Path.home() / ".cache" / "peakr-bin"
+    bindir.mkdir(parents=True, exist_ok=True)
+    link = bindir / "ffmpeg"
+    try:
+        if link.is_symlink() or link.exists():
+            link.unlink()
+        link.symlink_to(exe)
+    except OSError:
+        try:
+            shutil.copy2(exe, link)
+            link.chmod(0o755)
+        except OSError as e:
+            log.error(f"Could not expose bundled ffmpeg: {e}")
+            return None
+    os.environ["PATH"] = f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}"
+    log.info(f"ffmpeg resolved via imageio-ffmpeg: {exe}")
+    return str(link)
 
 # Whisper mode: "local" (free, uses whisper CLI on Mac Mini) or "api" (OpenAI API, $0.006/min)
 WHISPER_MODE = os.environ.get("WHISPER_MODE", "local")

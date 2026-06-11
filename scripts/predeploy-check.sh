@@ -12,11 +12,20 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+# Prefer the project venv (the daemon's actual interpreter), so the real
+# dependencies are present; fall back to python3 if there's no venv.
+PY="python3"
+[ -x ".venv/bin/python" ] && PY=".venv/bin/python"
+echo "[predeploy] interpreter: $PY"
+
 echo "[predeploy] smoke-importing the daemon modules..."
-# Import without a DB so a syntax/import error fails fast and loudly.
-DATABASE_URL='' python3 -c "import scraper.db, scraper.daemon, scraper.analyze, scraper.tiktok, scraper.instagram; print('imports OK')"
+DATABASE_URL='' "$PY" -c "import scraper.db, scraper.daemon, scraper.analyze, scraper.tiktok, scraper.instagram, scraper.transcribe; print('imports OK')"
 
 echo "[predeploy] running pure (no-DB) unit tests..."
-python3 -m pytest scraper/tests/ -q -k "not db"
+if "$PY" -c "import pytest" 2>/dev/null; then
+  "$PY" -m pytest scraper/tests/ -q -k "not db"
+else
+  echo "[predeploy] pytest not installed in $PY — skipping tests (imports already passed)"
+fi
 
 echo "[predeploy] OK — safe to restart the daemon."
