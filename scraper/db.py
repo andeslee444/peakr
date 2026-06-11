@@ -889,18 +889,25 @@ def get_active_profiles() -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def recalculate_viral_scores(profile_id: int):
-    """Recalculate viral_score for ALL posts of a profile based on avg engagement."""
+def recalculate_viral_scores(profile_id: int) -> int:
+    """Recalculate viral_score for a profile's posts. Returns rows actually changed.
+
+    The IS DISTINCT FROM guard skips no-op writes so a 500-post creator doesn't
+    rewrite 500 rows (+ index churn + dead tuples) every 4h when nothing changed.
+    """
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
-        UPDATE posts SET viral_score = ROUND(((likes + comments)::numeric / avg_eng), 2)
+        UPDATE posts SET viral_score = ROUND(((posts.likes + posts.comments)::numeric / sub.avg_eng), 2)
         FROM (SELECT AVG(likes + comments) AS avg_eng FROM posts WHERE profile_id = %s AND (likes + comments) > 0) sub
-        WHERE profile_id = %s AND (likes + comments) > 0 AND sub.avg_eng > 0
+        WHERE posts.profile_id = %s AND (posts.likes + posts.comments) > 0 AND sub.avg_eng > 0
+          AND ROUND(posts.viral_score::numeric, 2) IS DISTINCT FROM ROUND(((posts.likes + posts.comments)::numeric / sub.avg_eng), 2)
     """, (profile_id, profile_id))
+    changed = cur.rowcount
     conn.commit()
     cur.close()
     conn.close()
+    return changed
 
 
 def backfill_hook_patterns():
