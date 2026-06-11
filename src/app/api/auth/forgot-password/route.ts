@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { getPool } from '@/lib/db';
 import { normalizeEmail, isValidEmail } from '@/lib/auth-validation';
 import { generateResetToken, hashToken } from '@/lib/reset-token';
-import { sendEmail } from '@/lib/email';
+import { sendEmail, isEmailConfigured } from '@/lib/email';
 import { enforceRateLimit } from '@/lib/rate-limit';
 
 const TOKEN_TTL_MS = 60 * 60 * 1000; // 1 hour
@@ -10,6 +10,20 @@ const TOKEN_TTL_MS = 60 * 60 * 1000; // 1 hour
 export async function POST(request: Request) {
   const limited = enforceRateLimit(request, 'forgot-password', 5, 15 * 60_000);
   if (limited) return limited;
+
+  // If email delivery isn't configured, sending would silently no-op — so don't
+  // claim a link was sent. This gate is decided BEFORE any user lookup and is the
+  // same for every email, so it can't be used to enumerate accounts.
+  if (!isEmailConfigured()) {
+    return NextResponse.json(
+      {
+        ok: false,
+        available: false,
+        message: 'Password reset is temporarily unavailable. Please contact support.',
+      },
+      { status: 503 }
+    );
+  }
 
   // Always return the same generic response so callers can't tell whether an
   // email is registered.
