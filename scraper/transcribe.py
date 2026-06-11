@@ -108,13 +108,43 @@ def transcribe_audio(audio_path: str) -> Optional[str]:
     return _transcribe_local(audio_path)
 
 
-def _transcribe_local(audio_path: str) -> Optional[str]:
-    """Transcribe using local whisper CLI (free, runs on Mac Mini).
+def _transcribe_mlx(audio_path: str) -> Optional[str]:
+    """Transcribe with mlx-whisper (Apple Silicon GPU — fast, free, on-device).
 
-    Requires: pip3 install openai-whisper
-    Or: brew install whisper-cpp
+    Returns None when mlx-whisper isn't installed or fails, so the caller falls
+    back to the whisper / whisper-cpp CLIs. Model is configurable via
+    MLX_WHISPER_MODEL (a HuggingFace repo id), default whisper-base.
     """
-    # Try openai-whisper (Python package) first
+    try:
+        import mlx_whisper
+    except ImportError:
+        return None
+    try:
+        model = os.environ.get("MLX_WHISPER_MODEL", "mlx-community/whisper-base-mlx")
+        result = mlx_whisper.transcribe(audio_path, path_or_hf_repo=model)
+        text = (result.get("text") or "").strip()
+        return text or None
+    except Exception as e:
+        log.error(f"mlx-whisper transcription failed: {e}")
+        return None
+
+
+def _transcribe_local(audio_path: str) -> Optional[str]:
+    """Transcribe locally with no API key.
+
+    Prefers mlx-whisper on Apple Silicon (the Mac Mini is an M-series), then
+    falls back to the openai-whisper / whisper-cpp CLIs.
+
+    Requires one of: pip3 install mlx-whisper  (Apple Silicon, recommended)
+                     pip3 install openai-whisper
+                     brew install whisper-cpp
+    """
+    # Prefer the GPU-accelerated Apple Silicon path.
+    mlx_text = _transcribe_mlx(audio_path)
+    if mlx_text is not None:
+        return mlx_text
+
+    # Try openai-whisper (Python package) next
     try:
         result = subprocess.run(
             ["whisper", audio_path, "--model", "base", "--output_format", "txt",
