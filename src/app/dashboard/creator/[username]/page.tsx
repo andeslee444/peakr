@@ -5,7 +5,7 @@ import { isAnalyzed } from '@/lib/scrape-status';
 import { useParams } from 'next/navigation';
 import Image from 'next/image';
 import Link from 'next/link';
-import { formatNumber, formatViralScore, proxyImg } from '@/lib/format';
+import { formatNumber, formatViralScore, proxyImg, formatFreshness } from '@/lib/format';
 import type { Post, HookAnalysis } from '@/lib/types';
 import { HookTypeBadge } from '@/components/HookBadge';
 import InsightsPanel from '@/components/InsightsPanel';
@@ -128,6 +128,9 @@ export default function CreatorPage() {
             {(profile.display_name as string) && (
               <p className="text-gray-500 text-sm">{profile.display_name as string}</p>
             )}
+            <p className="text-gray-400 text-xs mt-0.5">
+              {formatFreshness(profile.last_scraped_at as string | null, Date.now(), { staleAfterMs: 4 * 3600_000 })}
+            </p>
             {(profile.bio as string) && (
               <p className="text-gray-600 text-sm mt-1 line-clamp-2">{profile.bio as string}</p>
             )}

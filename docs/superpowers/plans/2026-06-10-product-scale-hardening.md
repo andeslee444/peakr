@@ -76,7 +76,7 @@
 - [ ] **8.6 Hook Lab empty-state CTA / clear-niche**.
 - [ ] **8.7 Value loop: track own handle + weekly digest**.
 - [ ] **8.8 Persist generated hooks/remixes**.
-- [ ] **8.9 Per-profile freshness rendering**.
+- [x] **8.9 Per-profile freshness rendering**.
 
 ---
 
