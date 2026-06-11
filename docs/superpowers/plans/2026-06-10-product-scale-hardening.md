@@ -68,6 +68,8 @@
 
 ## Wave 8 — Throughput + remaining product ✅ DONE
 
+> Post-merge follow-up: analysis pass now processes posts with bounded concurrency (ANALYSIS_CONCURRENCY, default 3) instead of serially — drains the hook-analysis backlog. Most effective once WHISPER_MODE=api is set (the remaining ops flip).
+
 - [x] **8.1 Scrape-debt metric + Sentry paging** (get_scrape_debt + daemon alert). Prereqs done: SKIP LOCKED [5.1] + connection pool [6.6]. **Remaining (ops, needs Mini runtime):** spawn 3-5 worker processes claiming via the now-concurrency-safe queue + route the 4h refresh through it.
 - [x] **8.2 `WHISPER_MODE=api` path**.
 - [x] **8.3 Landing page reposition (copy + real screenshots)**.
