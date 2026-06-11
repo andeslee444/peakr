@@ -28,15 +28,15 @@ const features = [
   },
   {
     number: '2',
-    title: 'Sort by best performance',
-    description: 'Instantly spot winning posts, repeatable formats, and high-performing creators. See which sounds are driving viral videos.',
-    preview: '📈',
+    title: 'Decode the hooks with AI',
+    description: 'The Hook Lab analyzes top posts and breaks down the hook type, format, and emotional trigger behind why each one went viral.',
+    preview: '🪝',
   },
   {
     number: '3',
-    title: 'Export and execute',
-    description: 'Export data to Excel, compare accounts side by side, and build content or influencer campaigns backed by real performance metrics.',
-    preview: '💾',
+    title: 'Generate & execute',
+    description: 'Generate hook scripts and a content playbook for your own niche, compare accounts side by side, and export the data.',
+    preview: '📖',
   },
 ];
 

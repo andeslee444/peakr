@@ -3,11 +3,11 @@
 import Link from 'next/link';
 
 const sampleContent = [
-  { username: '@midnightmischiefsleepwear', score: '4.9x', image: '🌙' },
-  { username: '@xixiplease', score: '3090x', image: '✨' },
+  { username: '@midnightmischief', score: '4.9x', image: '🌙' },
+  { username: '@xixiplease', score: '6.2x', image: '✨' },
   { username: '@yukatsunami', score: '3.8x', image: '🌊' },
-  { username: '@remi.tswjourney', score: '202x', image: '🎯' },
-  { username: '@cheekyglo', score: '181x', image: '💫' },
+  { username: '@remi.tsw', score: '5.1x', image: '🎯' },
+  { username: '@cheekyglo', score: '2.7x', image: '💫' },
 ];
 
 export default function Hero() {
@@ -18,13 +18,14 @@ export default function Hero() {
           {/* Left side - Text */}
           <div className="text-center lg:text-left">
             <h1 className="text-4xl md:text-5xl lg:text-6xl font-bold text-gray-900 leading-tight">
-              <span className="gradient-text">Go viral</span>
+              <span className="gradient-text">Reverse-engineer</span>
               <br />
-              with Competitive Insights
+              viral hooks
             </h1>
             <p className="mt-6 text-lg text-gray-600 max-w-xl mx-auto lg:mx-0">
-              Track any public Instagram or TikTok account to see which content,
-              creators, and formats are actually performing.
+              Track any Instagram or TikTok account and our AI Hook Lab breaks down
+              <em> why</em> their top posts went viral — then generates hook scripts
+              for your own niche.
             </p>
             <div className="mt-8">
               <Link
