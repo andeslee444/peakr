@@ -96,11 +96,16 @@ def extract_keyframes(video_path: str, output_dir: str, duration: float = 5.0, c
 
 
 def transcribe_audio(audio_path: str) -> Optional[str]:
-    """Transcribe audio using either local Whisper or OpenAI API."""
-    if WHISPER_MODE == "api":
+    """Transcribe audio using either local Whisper or the OpenAI API.
+
+    Mode is read at call time so it can be flipped via WHISPER_MODE=api without a
+    restart. The API path (~$0.006/min) unblocks the analysis backlog without a
+    GPU — local CPU Whisper runs ~real-time and bottlenecks the single daemon.
+    """
+    mode = os.environ.get("WHISPER_MODE", WHISPER_MODE)
+    if mode == "api":
         return _transcribe_api(audio_path)
-    else:
-        return _transcribe_local(audio_path)
+    return _transcribe_local(audio_path)
 
 
 def _transcribe_local(audio_path: str) -> Optional[str]:
