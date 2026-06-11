@@ -709,6 +709,31 @@ def pop_scrape_queue() -> Optional[tuple]:
     return (queue_id, profile['username'], profile['platform'])
 
 
+def get_scrape_debt(sla_seconds: int) -> int:
+    """Count active profiles past their refresh SLA — the scrape backlog.
+
+    Rising debt means one daemon can't keep up with the 4h freshness promise
+    (the silent failure mode), so the daemon alerts when this crosses a threshold.
+    Excludes reaped (dead) profiles since we've intentionally stopped scraping them.
+    """
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT COUNT(*) FROM profiles pr
+        WHERE pr.consecutive_failures < %s
+        AND (
+            EXISTS (SELECT 1 FROM seed_creators sc
+                    WHERE sc.username = pr.username AND sc.platform = pr.platform AND sc.is_active = TRUE)
+            OR EXISTS (SELECT 1 FROM user_tracked_profiles utp WHERE utp.profile_id = pr.id)
+        )
+        AND (pr.last_scraped_at IS NULL OR pr.last_scraped_at < NOW() - make_interval(secs => %s))
+    """, (REAP_THRESHOLD, sla_seconds))
+    n = cur.fetchone()[0]
+    cur.close()
+    conn.close()
+    return n
+
+
 def reclaim_stale_queue_entries(max_age_minutes: int = 15) -> int:
     """Reset queue rows stuck 'in_progress' (daemon crashed mid-scrape) back to
     'pending' so the profile can be scraped again. Returns rows reclaimed."""

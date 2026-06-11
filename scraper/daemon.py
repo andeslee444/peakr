@@ -30,7 +30,7 @@ from scraper.db import (
     compute_daily_top_hooks, update_profile_niches, clean_expired_video_cache,
     queue_top_posts_for_analysis, backfill_hook_patterns, recalculate_pattern_stats,
     generate_viral_post_notifications, reclaim_stale_queue_entries, record_heartbeat,
-    record_scrape_failure, record_scrape_success,
+    record_scrape_failure, record_scrape_success, get_scrape_debt,
 )
 from scraper.observability import init_sentry, capture_exception
 from scraper.backoff import should_attempt
@@ -48,6 +48,10 @@ RATE_LIMITS = {
 }
 
 REFRESH_INTERVAL = 4 * 3600  # 4 hours
+
+# Page when this many profiles fall behind the refresh SLA (one daemon's ceiling
+# is ~40-45 paying users; debt rising past this means it's time for a worker pool).
+SCRAPE_DEBT_ALERT_THRESHOLD = 50
 
 # US Eastern (handles EST/EDT automatically)
 EST = ZoneInfo("America/New_York")
@@ -333,6 +337,15 @@ def run_daemon():
                 try:
                     record_heartbeat(WORKER_ID)
                     reclaim_stale_queue_entries()
+                    # Scrape-debt: profiles past the 4h SLA. Rising debt is the
+                    # silent failure mode (one daemon can't keep up) — alert on it.
+                    debt = get_scrape_debt(REFRESH_INTERVAL)
+                    if debt > 0:
+                        log.info(f"[DEBT] {debt} profiles past the {REFRESH_INTERVAL//3600}h refresh SLA")
+                    if debt >= SCRAPE_DEBT_ALERT_THRESHOLD:
+                        capture_exception(Exception(
+                            f"Scrape debt high: {debt} profiles past SLA — daemon can't keep up"
+                        ))
                 except Exception as e:
                     log.error(f"Heartbeat/reclaim error: {e}")
                     capture_exception(e)
