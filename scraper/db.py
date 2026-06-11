@@ -9,6 +9,7 @@ from datetime import datetime
 from typing import Optional
 
 from scraper.analysis_state import MAX_ANALYSIS_ATTEMPTS, failure_marker
+from scraper.backoff import REAP_THRESHOLD
 
 DATABASE_URL = os.environ.get('DATABASE_URL', '')
 
@@ -38,6 +39,8 @@ CREATE TABLE IF NOT EXISTS profiles (
   post_count INTEGER DEFAULT 0,
   avg_views REAL DEFAULT 0,
   last_scraped_at TIMESTAMPTZ,
+  consecutive_failures INTEGER NOT NULL DEFAULT 0,
+  last_scrape_failed_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE(username, platform)
 );
@@ -412,6 +415,47 @@ def migrate_audio_columns():
         ALTER TABLE posts ADD COLUMN IF NOT EXISTS audio_name TEXT;
         ALTER TABLE posts ADD COLUMN IF NOT EXISTS audio_author TEXT;
     """)
+    conn.commit()
+    cur.close()
+    conn.close()
+
+
+def migrate_failure_columns():
+    """Persistent per-profile failure tracking (survives daemon restarts)."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        ALTER TABLE profiles ADD COLUMN IF NOT EXISTS consecutive_failures INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE profiles ADD COLUMN IF NOT EXISTS last_scrape_failed_at TIMESTAMPTZ;
+    """)
+    conn.commit()
+    cur.close()
+    conn.close()
+
+
+def record_scrape_failure(username: str, platform: str) -> None:
+    """Increment a profile's consecutive-failure count (drives backoff + reaping)."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        """UPDATE profiles SET consecutive_failures = consecutive_failures + 1,
+                                last_scrape_failed_at = NOW()
+           WHERE username = %s AND platform = %s""",
+        (username, platform),
+    )
+    conn.commit()
+    cur.close()
+    conn.close()
+
+
+def record_scrape_success(username: str, platform: str) -> None:
+    """Reset a profile's consecutive-failure count after a good scrape."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE profiles SET consecutive_failures = 0 WHERE username = %s AND platform = %s",
+        (username, platform),
+    )
     conn.commit()
     cur.close()
     conn.close()
@@ -823,15 +867,18 @@ def get_active_profiles() -> list[dict]:
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute("""
         SELECT DISTINCT pr.* FROM profiles pr
-        WHERE EXISTS (
-            SELECT 1 FROM seed_creators sc
-            WHERE sc.username = pr.username AND sc.platform = pr.platform AND sc.is_active = TRUE
-        )
-        OR EXISTS (
-            SELECT 1 FROM user_tracked_profiles utp WHERE utp.profile_id = pr.id
+        WHERE pr.consecutive_failures < %s
+        AND (
+            EXISTS (
+                SELECT 1 FROM seed_creators sc
+                WHERE sc.username = pr.username AND sc.platform = pr.platform AND sc.is_active = TRUE
+            )
+            OR EXISTS (
+                SELECT 1 FROM user_tracked_profiles utp WHERE utp.profile_id = pr.id
+            )
         )
         ORDER BY pr.last_scraped_at ASC NULLS FIRST
-    """)
+    """, (REAP_THRESHOLD,))
     rows = cur.fetchall()
     cur.close()
     conn.close()
@@ -1009,4 +1056,5 @@ if DATABASE_URL:
     migrate_hook_columns()
     migrate_audio_columns()
     migrate_bignum_columns()
+    migrate_failure_columns()
     migrate_indexes()

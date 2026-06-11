@@ -30,6 +30,7 @@ from scraper.db import (
     compute_daily_top_hooks, update_profile_niches, clean_expired_video_cache,
     queue_top_posts_for_analysis, backfill_hook_patterns, recalculate_pattern_stats,
     generate_viral_post_notifications, reclaim_stale_queue_entries, record_heartbeat,
+    record_scrape_failure, record_scrape_success,
 )
 from scraper.observability import init_sentry, capture_exception
 from scraper.backoff import should_attempt
@@ -373,6 +374,11 @@ def run_daemon():
                                 log.info(f"{'done' if ok else 'error'} {platform}/@{username}")
                                 if ok:
                                     scrape_failures.pop(key, None)
+                                    # Persist success so the reap counter resets across restarts.
+                                    try:
+                                        record_scrape_success(username, platform)
+                                    except Exception:
+                                        pass
                                     try:
                                         n = generate_viral_post_notifications(username, platform)
                                         if n:
@@ -381,8 +387,17 @@ def run_daemon():
                                         log.error(f"[NOTIFY] Error generating notifications: {e}")
                                 else:
                                     scrape_failures[key] = {"failures": fstate["failures"] + 1, "last": time.time()}
+                                    # Persist failure so a dead profile is reaped even across restarts.
+                                    try:
+                                        record_scrape_failure(username, platform)
+                                    except Exception:
+                                        pass
                             except Exception as e:
                                 scrape_failures[key] = {"failures": fstate["failures"] + 1, "last": time.time()}
+                                try:
+                                    record_scrape_failure(username, platform)
+                                except Exception:
+                                    pass
                                 log.error(f"Error scraping {platform}/@{username}: {e}")
 
                             delay = RATE_LIMITS.get(platform, 60) + random.uniform(0, 15)

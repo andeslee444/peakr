@@ -120,6 +120,8 @@ async function initSchema() {
     ALTER TABLE posts ADD COLUMN IF NOT EXISTS hook_analysis JSONB;
     ALTER TABLE posts ADD COLUMN IF NOT EXISTS analyzed_at TIMESTAMPTZ;
     ALTER TABLE profiles ADD COLUMN IF NOT EXISTS primary_niche TEXT;
+    ALTER TABLE profiles ADD COLUMN IF NOT EXISTS consecutive_failures INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE profiles ADD COLUMN IF NOT EXISTS last_scrape_failed_at TIMESTAMPTZ;
     ALTER TABLE posts ADD COLUMN IF NOT EXISTS keyframe_base64 TEXT;
     ALTER TABLE posts ADD COLUMN IF NOT EXISTS s3_thumbnail_url TEXT;
     ALTER TABLE posts ADD COLUMN IF NOT EXISTS audio_name TEXT;
