@@ -48,14 +48,14 @@
 - [x] **5.6 TikTok empty-vs-broken + pin yt-dlp** — distinguish; alert on fleet-wide zero spike; startup self-test. Test: broken layout ≠ "success 0".
 - [x] **5.7 Route yt-dlp/IG video through proxy** — no raw home-IP egress. Test: download invoked with proxy.
 
-## Wave 6 — Scale / performance (DB + client)
+## Wave 6 — Scale / performance (DB + client) ✅ DONE
 
 - [x] **6.1 Hook Lab indexes** — partial index `posts(viral_score DESC) WHERE analyzed_at IS NOT NULL`; JSONB facet expression indexes; gate `COUNT(*)` to first page/keyset. Mirror both schemas.
 - [x] **6.2 Drop `keyframe_base64` from feed SELECT** — serve via `/api/keyframe`; keep `transcript` (rendered).
 - [x] **6.3 `viral_score` skip no-op writes** — `AND viral_score IS DISTINCT FROM ROUND(...)`.
 - [x] **6.4 Analytics cache + user-hooks pagination** — short-TTL cache; fix N+1.
 - [x] **6.5 Dashboard polling** — Page Visibility gating + Cache-Control on worker-status/notifications.
-- [ ] **6.6 Daemon connection pool**.
+- [x] **6.6 Daemon connection pool**.
 
 ## Wave 7 — Security / session / hygiene
 

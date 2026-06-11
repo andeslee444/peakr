@@ -252,10 +252,55 @@ CREATE INDEX IF NOT EXISTS idx_notifications_created_at ON notifications(created
 """
 
 
+import psycopg2.pool
+
+_POOL = None
+
+
+def _get_pool():
+    global _POOL
+    if _POOL is None:
+        maxconn = int(os.environ.get("DB_POOL_MAX", "5"))
+        _POOL = psycopg2.pool.ThreadedConnectionPool(1, maxconn, DATABASE_URL)
+    return _POOL
+
+
+class _PooledConn:
+    """Wraps a pooled connection so the pervasive ``conn.close()`` in this module
+    *returns* the connection to the pool instead of tearing down the TCP/TLS
+    session — eliminating a reconnect per DB call without touching call sites.
+    Any uncommitted/aborted transaction is rolled back before reuse."""
+
+    def __init__(self, raw, pool):
+        self._raw = raw
+        self._pool = pool
+
+    def close(self):
+        try:
+            if not self._raw.closed:
+                self._raw.rollback()
+            self._pool.putconn(self._raw)
+        except Exception:
+            try:
+                self._pool.putconn(self._raw, close=True)
+            except Exception:
+                try:
+                    self._raw.close()
+                except Exception:
+                    pass
+
+    def __getattr__(self, name):
+        return getattr(self._raw, name)
+
+
 def get_conn():
-    conn = psycopg2.connect(DATABASE_URL)
-    conn.autocommit = False
-    return conn
+    pool = _get_pool()
+    raw = pool.getconn()
+    if raw.closed:  # pooled connection died while idle (e.g. server timeout)
+        pool.putconn(raw, close=True)
+        raw = pool.getconn()
+    raw.autocommit = False
+    return _PooledConn(raw, pool)
 
 
 def init_db():
