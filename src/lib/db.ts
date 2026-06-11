@@ -214,32 +214,9 @@ async function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_utp_user_id ON user_tracked_profiles(user_id);
     CREATE INDEX IF NOT EXISTS idx_utp_profile_id ON user_tracked_profiles(profile_id);
   `);
-  // User hooks (pattern-based saves) and examples
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS user_hooks (
-      id SERIAL PRIMARY KEY,
-      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      canonical_template TEXT,
-      display_name TEXT,
-      hook_type TEXT,
-      niche TEXT,
-      notes TEXT,
-      created_at TIMESTAMPTZ DEFAULT NOW(),
-      updated_at TIMESTAMPTZ DEFAULT NOW()
-    );
-
-    CREATE UNIQUE INDEX IF NOT EXISTS user_hooks_user_template_key
-      ON user_hooks(user_id, canonical_template)
-      WHERE canonical_template IS NOT NULL;
-
-    CREATE TABLE IF NOT EXISTS user_hook_examples (
-      id SERIAL PRIMARY KEY,
-      user_hook_id INTEGER NOT NULL REFERENCES user_hooks(id) ON DELETE CASCADE,
-      post_id INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
-      added_at TIMESTAMPTZ DEFAULT NOW(),
-      UNIQUE(user_hook_id, post_id)
-    );
-  `);
+  // NOTE: the legacy user_hooks / user_hook_examples tables were removed — the
+  // live "My Hooks" feature uses hook_patterns + user_saved_patterns below. Any
+  // pre-existing empty tables in older databases are harmless and left in place.
   // Global hook patterns (system-wide grouping + analytics)
   await pool.query(`
     CREATE TABLE IF NOT EXISTS hook_patterns (

@@ -61,7 +61,7 @@
 
 - [x] **7.1 Invalidate JWTs on password change** — `password_changed_at`/`token_version`.
 - [ ] **7.2 Shared rate limiter** — Upstash/Vercel KV behind `rateLimit()` (or document the limitation + gate).
-- [ ] **7.3 Remove dead `saved_hooks`/`user_hooks`; fix `saved/import` stat recompute**.
+- [x] **7.3 Remove dead `saved_hooks`/`user_hooks`; fix `saved/import` stat recompute**.
 - [ ] **7.4 Schema source of truth + CI drift check**.
 - [ ] **7.5 Onboarding gate on JWT value**.
 - [ ] **7.6 CI gate (vitest+pytest on push) + pre-restart smoke gate + rollback**.

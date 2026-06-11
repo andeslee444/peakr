@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import { getPool } from '@/lib/db';
 import { normalizeTemplate } from '@/lib/normalize-template';
+import { recomputePatternStats } from '@/lib/hook-patterns';
 
 export async function POST(request: NextRequest) {
   const session = await auth();
@@ -66,24 +67,8 @@ export async function POST(request: NextRequest) {
       [pattern.id, post_id]
     );
 
-    // Update pattern stats
-    await client.query(
-      `UPDATE hook_patterns SET
-         example_count = sub.cnt,
-         avg_viral_score = sub.avg_vs,
-         avg_views = sub.avg_v,
-         updated_at = NOW()
-       FROM (
-         SELECT COUNT(*) AS cnt,
-                COALESCE(AVG(p.viral_score), 0) AS avg_vs,
-                COALESCE(AVG(p.views), 0) AS avg_v
-         FROM hook_pattern_posts hpp
-         JOIN posts p ON hpp.post_id = p.id
-         WHERE hpp.pattern_id = $1
-       ) sub
-       WHERE hook_patterns.id = $1`,
-      [pattern.id]
-    );
+    // Update pattern stats (shared with saved/import).
+    await recomputePatternStats(client, pattern.id);
 
     // Save pattern for user
     const { rows: [saved] } = await client.query(
