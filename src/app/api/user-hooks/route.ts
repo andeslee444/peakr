@@ -184,12 +184,18 @@ export async function GET(request: NextRequest) {
     const exampleThumbnails: Record<number, Array<{ post_id: number; thumbnail_url: string | null; s3_thumbnail_url: string | null }>> = {};
 
     if (patternIds.length > 0) {
+      // Bound to the top 5 examples per pattern in SQL — the old query fetched
+      // EVERY post for every pattern and discarded all but 5 in JS (unbounded
+      // DB→server transfer that grew with each pattern's example count).
       const { rows: examples } = await pool.query(`
-        SELECT hpp.pattern_id, p.id as post_id, p.thumbnail_url, p.s3_thumbnail_url
-        FROM hook_pattern_posts hpp
-        JOIN posts p ON hpp.post_id = p.id
-        WHERE hpp.pattern_id = ANY($1)
-        ORDER BY p.viral_score DESC
+        SELECT pattern_id, post_id, thumbnail_url, s3_thumbnail_url FROM (
+          SELECT hpp.pattern_id, p.id AS post_id, p.thumbnail_url, p.s3_thumbnail_url,
+                 ROW_NUMBER() OVER (PARTITION BY hpp.pattern_id ORDER BY p.viral_score DESC) AS rn
+          FROM hook_pattern_posts hpp
+          JOIN posts p ON hpp.post_id = p.id
+          WHERE hpp.pattern_id = ANY($1)
+        ) ranked
+        WHERE rn <= 5
       `, [patternIds]);
 
       for (const ex of examples) {

@@ -1,6 +1,11 @@
 import { NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import { getPool } from '@/lib/db';
+import { getCached } from '@/lib/ttl-cache';
+
+// Analytics is read-mostly and expensive (5 aggregations); a short per-user cache
+// absorbs refresh storms / multiple tabs without changing the numbers materially.
+const ANALYTICS_TTL_MS = 30_000;
 
 export async function GET() {
   const session = await auth();
@@ -11,6 +16,7 @@ export async function GET() {
   const userId = Number(session.user.id);
 
   try {
+    const payload = await getCached(`analytics:${userId}`, ANALYTICS_TTL_MS, async () => {
     const pool = getPool();
 
     // All overview stats scoped to user's tracked profiles
@@ -78,7 +84,7 @@ export async function GET() {
       GROUP BY hour ORDER BY hour
     `, [userId]);
 
-    return NextResponse.json({
+    return {
       overview: {
         totalAccounts: Number(overview.total_accounts),
         totalPosts: Number(overview.total_posts),
@@ -93,7 +99,10 @@ export async function GET() {
         byDay: scheduleByDay,
         byHour: scheduleByHour,
       },
+    };
     });
+
+    return NextResponse.json(payload);
   } catch {
     return NextResponse.json({
       error: 'Failed to fetch analytics',
