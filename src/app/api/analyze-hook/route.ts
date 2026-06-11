@@ -2,6 +2,48 @@ import { NextResponse } from 'next/server';
 import { getPool } from '@/lib/db';
 import { getUserId, unauthorized } from '@/lib/api-auth';
 import { DAILY_MANUAL_ANALYSIS_CAP } from '@/lib/analysis-limits';
+import { isAnalyzed, isAnalysisPending } from '@/lib/scrape-status';
+
+/**
+ * Poll the analysis status of a queued post (the daemon resolves it async).
+ * Lets the Insights panel show progress and resolve in-session instead of a
+ * permanent "check back later" box.
+ */
+export async function GET(request: Request) {
+  const userId = await getUserId();
+  if (userId === null) return unauthorized();
+
+  const { searchParams } = new URL(request.url);
+  const postId = Number(searchParams.get('post_id'));
+  if (!postId) {
+    return NextResponse.json({ error: 'post_id is required' }, { status: 400 });
+  }
+
+  const pool = getPool();
+  const { rows: [post] } = await pool.query(
+    `SELECT p.analyzed_at, p.hook_analysis, p.transcript
+     FROM posts p
+     JOIN user_tracked_profiles utp ON utp.profile_id = p.profile_id
+     WHERE p.id = $1 AND utp.user_id = $2`,
+    [postId, userId]
+  );
+
+  if (!post) {
+    return NextResponse.json({ error: 'Post not found' }, { status: 404 });
+  }
+  if (isAnalyzed(post)) {
+    return NextResponse.json({
+      status: 'done',
+      hook_analysis: post.hook_analysis,
+      analyzed_at: post.analyzed_at,
+      transcript: post.transcript ?? null,
+    });
+  }
+  if (isAnalysisPending(post)) {
+    return NextResponse.json({ status: 'queued' });
+  }
+  return NextResponse.json({ status: 'idle' });
+}
 
 export async function POST(request: Request) {
   const userId = await getUserId();

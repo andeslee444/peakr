@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { formatNumber, formatViralScore, proxyImg } from '@/lib/format';
 import type { Profile, Post } from '@/lib/types';
 import VideoHover from '@/components/VideoHover';
+import { profileScrapeState } from '@/lib/scrape-status';
 
 export default function TrackedPage() {
   const [profiles, setProfiles] = useState<Profile[]>([]);
@@ -114,6 +115,21 @@ export default function TrackedPage() {
 
   useEffect(() => { fetchData(); }, [fetchData]);
   useEffect(() => { fetchTrackedPosts(0); }, [fetchTrackedPosts]);
+
+  // Any tracked profile the daemon hasn't fetched yet → show a "fetching" state
+  // and poll so the first session doesn't sit on a permanent empty grid.
+  const anyScraping = profiles.some((p) => profileScrapeState(p, 1) === 'scraping');
+  useEffect(() => {
+    if (!anyScraping) return;
+    let attempts = 0;
+    const id = setInterval(() => {
+      attempts += 1;
+      fetchData();
+      fetchTrackedPosts(0);
+      if (attempts >= 20) clearInterval(id); // ~4 min cap, then give up quietly
+    }, 12_000);
+    return () => clearInterval(id);
+  }, [anyScraping, fetchData, fetchTrackedPosts]);
 
   const trackUser = async () => {
     const clean = trackUsername.replace(/^@/, '').trim();
@@ -388,6 +404,12 @@ export default function TrackedPage() {
 
           {postsLoading && trackedPosts.length === 0 ? (
             <div className="text-center py-8 text-gray-500">Loading posts...</div>
+          ) : trackedPosts.length === 0 && anyScraping ? (
+            <div className="text-center py-10 text-gray-500">
+              <div className="inline-block w-6 h-6 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin mb-3" />
+              <p className="font-medium text-gray-700">Fetching posts… this usually takes about a minute.</p>
+              <p className="text-sm mt-1">We&apos;re pulling the latest posts from your newly tracked accounts.</p>
+            </div>
           ) : trackedPosts.length === 0 ? (
             <p className="text-gray-500 text-center py-8">No posts yet. Posts will appear after your tracked accounts are scraped.</p>
           ) : (

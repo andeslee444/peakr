@@ -4,7 +4,7 @@ vi.mock('@/lib/auth', () => ({ auth: vi.fn() }));
 vi.mock('@/lib/db', () => ({ getPool: vi.fn() }));
 import { auth } from '@/lib/auth';
 import { getPool } from '@/lib/db';
-import { POST } from '@/app/api/analyze-hook/route';
+import { POST, GET } from '@/app/api/analyze-hook/route';
 import { DAILY_MANUAL_ANALYSIS_CAP } from '@/lib/analysis-limits';
 
 const mockAuth = vi.mocked(auth);
@@ -97,5 +97,44 @@ describe('POST /api/analyze-hook', () => {
     const sqls = query.mock.calls.map((c) => String(c[0]));
     expect(sqls.some((s) => s.includes('INSERT INTO analysis_requests'))).toBe(true);
     expect(sqls.some((s) => s.includes('UPDATE posts SET hook_analysis'))).toBe(true);
+  });
+});
+
+function getReq(postId: number) {
+  return new Request(`https://app.peakr.test/api/analyze-hook?post_id=${postId}`);
+}
+
+describe('GET /api/analyze-hook (poll status)', () => {
+  beforeEach(() => {
+    mockAuth.mockReset();
+    mockGetPool.mockReset();
+  });
+
+  it('401 without a session', async () => {
+    mockAuth.mockResolvedValue(null as never);
+    const res = await GET(getReq(7));
+    expect(res.status).toBe(401);
+  });
+
+  it('404 for a post the user does not track', async () => {
+    mockAuth.mockResolvedValue({ user: { id: '1' } } as never);
+    poolWith(() => ({ rows: [] }));
+    const res = await GET(getReq(7));
+    expect(res.status).toBe(404);
+  });
+
+  it('reports done with the analysis once resolved', async () => {
+    mockAuth.mockResolvedValue({ user: { id: '1' } } as never);
+    poolWith(() => ({ rows: [{ analyzed_at: '2026-06-10T00:00:00Z', hook_analysis: { hook_type: 'x' }, transcript: 't' }] }));
+    const res = await GET(getReq(7));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ status: 'done' });
+  });
+
+  it('reports queued while still pending', async () => {
+    mockAuth.mockResolvedValue({ user: { id: '1' } } as never);
+    poolWith(() => ({ rows: [{ analyzed_at: null, hook_analysis: { status: 'pending' }, transcript: null }] }));
+    const res = await GET(getReq(7));
+    expect(await res.json()).toMatchObject({ status: 'queued' });
   });
 });

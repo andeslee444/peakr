@@ -31,12 +31,12 @@
 - [x] **3.2 Webhook idempotency** — `stripe_events(event_id)` dedup table. Test: replayed event is a no-op.
 - [x] **3.3 Customer-id fallback** — resolve user by `stripe_customer_id` when metadata absent. Test: sub without metadata still maps.
 
-## Wave 4 — Activation UX
+## Wave 4 — Activation UX ✅ DONE
 
-- [ ] **4.1 First-track scrape state + polling** — render "Fetching @x… ~1 min" when `last_scraped_at IS NULL`; poll `/api/tracked-posts` with backoff. Test: helper picks pending state from payload.
-- [ ] **4.2 Creator page pending vs dead** — don't render hard-zeroed stats as a real (dead) account. Test: pending profile → loading state.
-- [ ] **4.3 Queued analysis polls to resolution** — poll until `analyzed_at`; call `onPostUpdate`. Test: poll helper stops on resolved.
-- [ ] **4.4 Pending posts not shown "Analyzed"** — check `status !== 'pending'`, not bare truthiness on `hook_analysis`. Test: pending → not "analyzed".
+- [x] **4.1 First-track scrape state + polling** — render "Fetching @x… ~1 min" when `last_scraped_at IS NULL`; poll `/api/tracked-posts` with backoff. Test: helper picks pending state from payload.
+- [x] **4.2 Creator page pending vs dead** — don't render hard-zeroed stats as a real (dead) account. Test: pending profile → loading state.
+- [x] **4.3 Queued analysis polls to resolution** — poll until `analyzed_at`; call `onPostUpdate`. Test: poll helper stops on resolved.
+- [x] **4.4 Pending posts not shown "Analyzed"** — check `status !== 'pending'`, not bare truthiness on `hook_analysis`. Test: pending → not "analyzed".
 
 ## Wave 5 — Scraper reliability (Python / pytest)
 
