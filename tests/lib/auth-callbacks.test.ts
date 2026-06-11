@@ -1,5 +1,21 @@
 import { describe, it, expect } from 'vitest';
-import { shapeSession } from '@/lib/auth-callbacks';
+import { shapeSession, sessionStillValid } from '@/lib/auth-callbacks';
+
+describe('sessionStillValid', () => {
+  it('valid when the token version matches the current version', () => {
+    expect(sessionStillValid(3, 3)).toBe(true);
+  });
+
+  it('invalid when the password changed (current version bumped past the token)', () => {
+    expect(sessionStillValid(2, 3)).toBe(false);
+  });
+
+  it('treats missing versions as 0 (legacy tokens stay valid until a real change)', () => {
+    expect(sessionStillValid(undefined, undefined)).toBe(true);
+    expect(sessionStillValid(undefined, 0)).toBe(true);
+    expect(sessionStillValid(undefined, 1)).toBe(false);
+  });
+});
 
 describe('shapeSession', () => {
   it('exposes the plan from the token on the session user (for UI gating)', () => {

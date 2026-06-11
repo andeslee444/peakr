@@ -299,6 +299,8 @@ async function initSchema() {
   await pool.query(`
     ALTER TABLE users ADD COLUMN IF NOT EXISTS plan TEXT NOT NULL DEFAULT 'free';
     ALTER TABLE users ADD COLUMN IF NOT EXISTS stripe_customer_id TEXT;
+    -- Bumped on password change to revoke existing JWTs.
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS token_version INTEGER NOT NULL DEFAULT 0;
   `);
   // Webhook idempotency: every processed Stripe event id is recorded so a
   // replayed/duplicated event is a no-op.

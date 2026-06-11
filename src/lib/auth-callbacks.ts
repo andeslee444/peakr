@@ -24,6 +24,16 @@ type TokenLike = { userId?: unknown; username?: unknown; plan?: unknown; [key: s
  * normalized — an unknown value is treated as `free`. Mutates and returns the
  * same session object.
  */
+/**
+ * Whether a JWT is still valid given the user's current token version. A
+ * password change bumps the DB version, so older tokens (issued before the
+ * change) no longer match and are treated as revoked. Missing values are 0, so
+ * pre-feature tokens stay valid until the first real change.
+ */
+export function sessionStillValid(tokenVersion: unknown, currentVersion: unknown): boolean {
+  return Number(tokenVersion ?? 0) === Number(currentVersion ?? 0);
+}
+
 export function shapeSession<T extends { user?: { name?: string | null } | null }>(
   session: T,
   token: TokenLike

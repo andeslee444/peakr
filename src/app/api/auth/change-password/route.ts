@@ -39,8 +39,10 @@ export async function POST(request: Request) {
   }
 
   const newHash = await bcrypt.hash(newPassword, 12);
+  // Bump token_version to revoke any other sessions (a changed password should
+  // log out the compromised session everywhere).
   await pool.query(
-    'UPDATE users SET password_hash = $1 WHERE id = $2',
+    'UPDATE users SET password_hash = $1, token_version = token_version + 1 WHERE id = $2',
     [newHash, session.user.id]
   );
 
