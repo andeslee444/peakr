@@ -26,6 +26,17 @@ def get_proxy_config() -> dict:
     return {"server": f"socks5://{PROXY_HOST}:{PROXY_PORT}"}
 
 
+def ytdlp_proxy_args() -> list:
+    """yt-dlp CLI args to route downloads through the WARP proxy when it's up.
+
+    Without this, yt-dlp video downloads exit the raw home IP — defeating the
+    proxy used for the rest of the IG/TikTok scrape and inviting an IP ban.
+    """
+    if is_wireproxy_running():
+        return ["--proxy", f"socks5://{PROXY_HOST}:{PROXY_PORT}"]
+    return []
+
+
 def test_proxy() -> bool:
     """Test if the proxy is working."""
     try:

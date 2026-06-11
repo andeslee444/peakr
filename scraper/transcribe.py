@@ -39,7 +39,8 @@ def _get_cookie_file() -> Optional[str]:
 def download_video(post_url: str, output_path: str) -> bool:
     """Download a video using yt-dlp. Returns True on success."""
     try:
-        cmd = ["yt-dlp", "-o", output_path, "--no-playlist"]
+        from scraper.proxy import ytdlp_proxy_args
+        cmd = ["yt-dlp", "-o", output_path, "--no-playlist", *ytdlp_proxy_args()]
         cookie_file = _get_cookie_file()
         if cookie_file:
             cmd.extend(["--cookies", cookie_file])

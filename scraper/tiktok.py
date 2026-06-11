@@ -67,9 +67,11 @@ def _fetch_profile_page(session: requests.Session, username: str) -> Optional[di
 def _fetch_videos_ytdlp(username: str, count: int = 30) -> list[dict]:
     """Fetch video list via yt-dlp (handles TikTok's anti-bot signing)."""
     try:
+        from scraper.proxy import ytdlp_proxy_args
         result = subprocess.run(
             ['yt-dlp', '--flat-playlist', '--dump-json',
              '--playlist-items', f'1:{count}',
+             *ytdlp_proxy_args(),
              f'https://www.tiktok.com/@{username}'],
             capture_output=True, text=True, timeout=90,
         )
@@ -90,6 +92,22 @@ def _fetch_videos_ytdlp(username: str, count: int = 30) -> list[dict]:
     except Exception as e:
         print(f"  [!] yt-dlp error: {e}")
         return []
+
+
+def is_extraction_broken(profile_data: dict, video_count: int) -> bool:
+    """Distinguish a broken scrape from a genuinely empty profile.
+
+    A real TikTok profile yields metadata (name/followers/post_count) even with
+    zero videos. No metadata AND no videos means TikTok changed its page layout
+    and our heuristic JSON walk broke — which must be logged as an error, not as
+    a misleading "success / 0 posts".
+    """
+    has_meta = (
+        bool(profile_data.get("display_name"))
+        or (profile_data.get("followers") or 0) > 0
+        or (profile_data.get("post_count") or 0) > 0
+    )
+    return (not has_meta) and video_count == 0
 
 
 def scrape_profile(username: str) -> dict:
@@ -146,10 +164,14 @@ def scrape_profile(username: str) -> dict:
         except Exception as e:
             log.warning(f"S3 thumbnail upload failed for @{username}: {e}")
 
-    log_scrape(profile_id, 'success', len(videos), duration_ms=duration_ms)
-
-    print(f"  [✓] @{username}: {profile_data.get('followers', 0):,} followers, "
-          f"{len(videos)} videos ({duration_ms}ms)")
+    if is_extraction_broken(profile_data, len(videos)):
+        log_scrape(profile_id, 'error', len(videos),
+                   error_message='extraction_broken (no metadata + 0 videos)', duration_ms=duration_ms)
+        print(f"  [!] @{username}: extraction looks broken (no metadata, 0 videos) — TikTok layout may have changed")
+    else:
+        log_scrape(profile_id, 'success', len(videos), duration_ms=duration_ms)
+        print(f"  [✓] @{username}: {profile_data.get('followers', 0):,} followers, "
+              f"{len(videos)} videos ({duration_ms}ms)")
 
     return {**profile_data, 'videos': videos, 'profile_id': profile_id}
 
