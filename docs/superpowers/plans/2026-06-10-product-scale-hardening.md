@@ -73,7 +73,7 @@
 - [ ] **8.3 Landing page reposition (copy + real screenshots)**.
 - [ ] **8.4 a11y pass (labels, focus trap, keyboard)**.
 - [ ] **8.5 Land-in-Hook-Lab onboarding**.
-- [ ] **8.6 Hook Lab empty-state CTA / clear-niche**.
+- [x] **8.6 Hook Lab empty-state CTA / clear-niche**.
 - [ ] **8.7 Value loop: track own handle + weekly digest**.
 - [ ] **8.8 Persist generated hooks/remixes**.
 - [x] **8.9 Per-profile freshness rendering**.

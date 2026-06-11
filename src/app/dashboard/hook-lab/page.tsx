@@ -4,7 +4,8 @@ import { useState, useCallback, useEffect } from 'react';
 import type { Post, HookAnalysis } from '@/lib/types';
 import { formatNumber, formatViralScore } from '@/lib/format';
 import HookCard from '@/components/HookCard';
-import HookFilters, { DEFAULT_FILTERS, type HookFilterState } from '@/components/HookFilters';
+import HookFilters, { DEFAULT_FILTERS, hasActiveFilters, type HookFilterState } from '@/components/HookFilters';
+import Link from 'next/link';
 import HookStats from '@/components/HookStats';
 import InsightsPanel from '@/components/InsightsPanel';
 
@@ -334,10 +335,26 @@ export default function HookLabPage() {
           <span className="text-6xl">🪝</span>
           <h3 className="mt-4 text-lg font-semibold text-gray-900">No hooks found</h3>
           <p className="mt-2 text-gray-600">
-            {filters.analyzed_only
-              ? 'No analyzed posts match your filters. Try clearing filters or wait for more posts to be analyzed.'
-              : 'Track some profiles and the scraper will start analyzing hooks automatically.'}
+            {hasActiveFilters(filters)
+              ? 'No hooks match your current filters.'
+              : 'Track some accounts and the scraper will start analyzing their hooks automatically.'}
           </p>
+          <div className="mt-5 flex items-center justify-center gap-3">
+            {hasActiveFilters(filters) && (
+              <button
+                onClick={() => { setFilters(DEFAULT_FILTERS); setNicheSource(null); }}
+                className="px-5 py-2.5 bg-indigo-600 text-white rounded-xl text-sm font-medium hover:bg-indigo-700 transition-colors"
+              >
+                Clear filters
+              </button>
+            )}
+            <Link
+              href="/dashboard/tracked"
+              className="px-5 py-2.5 border border-gray-200 text-gray-700 rounded-xl text-sm font-medium hover:bg-gray-50 transition-colors"
+            >
+              Track accounts
+            </Link>
+          </div>
         </div>
       ) : (
         <>
