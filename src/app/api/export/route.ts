@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getPool } from '@/lib/db';
-import { getUserId, unauthorized } from '@/lib/api-auth';
+import { getUserId, unauthorized, requirePro } from '@/lib/api-auth';
 
 interface ExportRow {
   [key: string]: string | number | null;
@@ -9,6 +9,9 @@ interface ExportRow {
 export async function GET(request: Request) {
   const userId = await getUserId();
   if (userId === null) return unauthorized();
+  // Export is sold as a paid feature (see Pricing) — gate it behind Pro.
+  const gate = await requirePro(userId, 'Exporting viral content is a Pro feature.');
+  if (gate) return gate;
   try {
     const { searchParams } = new URL(request.url);
     const format = searchParams.get('format') || 'csv';
