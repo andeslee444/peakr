@@ -596,10 +596,15 @@ def pop_scrape_queue() -> Optional[tuple]:
     """
     conn = get_conn()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    # FOR UPDATE SKIP LOCKED makes the claim safe for concurrent workers: each
+    # transaction skips rows another worker has already locked, so no two workers
+    # ever claim the same queue entry (required before running a worker pool).
     cur.execute("""
         UPDATE scrape_queue SET status='in_progress', started_at=NOW()
         WHERE id = (
-            SELECT id FROM scrape_queue WHERE status='pending' ORDER BY id LIMIT 1
+            SELECT id FROM scrape_queue WHERE status='pending'
+            ORDER BY id LIMIT 1
+            FOR UPDATE SKIP LOCKED
         )
         RETURNING id, profile_id
     """)

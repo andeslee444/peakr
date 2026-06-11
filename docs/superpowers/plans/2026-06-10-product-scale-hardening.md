@@ -40,7 +40,7 @@
 
 ## Wave 5 — Scraper reliability (Python / pytest)
 
-- [ ] **5.1 `pop_scrape_queue` concurrency-safe** — `FOR UPDATE SKIP LOCKED`; add daemon PID guard. Test (db): two concurrent pops don't double-claim.
+- [x] **5.1 `pop_scrape_queue` concurrency-safe** — `FOR UPDATE SKIP LOCKED`; add daemon PID guard. Test (db): two concurrent pops don't double-claim.
 - [ ] **5.2 Transient vs deterministic analysis failure** — separate transient (LLM/infra) from deterministic; cooldown reset + circuit breaker; no permanent terminal-fail on a blip. Test: transient failure is retryable after cooldown.
 - [ ] **5.3 Health = success/freshness, not liveness** — heartbeat carries scrape success-rate; `/api/worker-status` reflects data freshness. Test: zero-fresh-data → not "healthy".
 - [ ] **5.4 Heartbeat during seed batches** — beat from inside seed inner loop. Test: heartbeat updated mid-batch.
