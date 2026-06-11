@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useSession, signOut } from 'next-auth/react';
+import { isPro } from '@/lib/plan';
 
 const navItems = [
   { name: 'Hook Lab', href: '/dashboard/hook-lab', icon: '🪝' },
@@ -204,21 +205,23 @@ export default function DashboardLayout({
           })}
         </nav>
 
-        <div className="absolute bottom-0 left-0 right-0 p-4">
-          <div className="bg-gradient-to-r from-indigo-500 to-purple-500 rounded-xl p-4 text-white">
-            <p className="font-semibold">Upgrade to Pro</p>
-            <p className="text-sm text-indigo-100 mt-1">
-              Track 50 accounts & more
-            </p>
-            <button
-              onClick={handleUpgrade}
-              disabled={upgrading}
-              className="mt-3 w-full bg-white text-indigo-600 font-semibold py-2 rounded-lg hover:bg-indigo-50 transition-colors disabled:opacity-60"
-            >
-              {upgrading ? 'Starting…' : 'Upgrade'}
-            </button>
+        {!isPro((session?.user as { plan?: string } | undefined)?.plan) && (
+          <div className="absolute bottom-0 left-0 right-0 p-4">
+            <div className="bg-gradient-to-r from-indigo-500 to-purple-500 rounded-xl p-4 text-white">
+              <p className="font-semibold">Upgrade to Pro</p>
+              <p className="text-sm text-indigo-100 mt-1">
+                Track 50 accounts & more
+              </p>
+              <button
+                onClick={handleUpgrade}
+                disabled={upgrading}
+                className="mt-3 w-full bg-white text-indigo-600 font-semibold py-2 rounded-lg hover:bg-indigo-50 transition-colors disabled:opacity-60"
+              >
+                {upgrading ? 'Starting…' : 'Upgrade'}
+              </button>
+            </div>
           </div>
-        </div>
+        )}
       </aside>
 
       {/* Main content */}

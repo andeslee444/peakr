@@ -22,7 +22,7 @@
 - [x] **2.2 Enforce track limit in `/api/track`** — `COUNT user_tracked_profiles`; reject with 402 at `>= trackLimit(plan)`; wire `src/lib/plan.ts` (currently dead). Test: free user at limit → 402; pro allowed.
 - [x] **2.3 Reconcile limit numbers** — one source of truth (`plan.ts`); fix account page (15) + `Pricing.tsx` (15/50) to match. Test: Pricing copy derives from plan constants.
 - [ ] **2.4 Gate costly actions behind `isPro()`** — `/api/export` + AI generation volume; return 402 with upgrade hint. Test: free export blocked or metered.
-- [ ] **2.5 Upgrade banner + checkout guard** — banner hidden when `plan==='pro'`; checkout rejects already-pro. Test: layout gate; checkout 409 when pro.
+- [x] **2.5 Upgrade banner + checkout guard** — banner hidden when `plan==='pro'`; checkout rejects already-pro. Test: layout gate; checkout 409 when pro.
 - [ ] **2.6 Account page reflects real plan + self-serve cancel** — Stripe Customer Portal route; annual reachable from upgrade. Test: portal route requires auth + customer id.
 
 ## Wave 3 — Billing robustness
