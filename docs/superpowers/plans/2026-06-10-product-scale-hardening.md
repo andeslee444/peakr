@@ -25,11 +25,11 @@
 - [x] **2.5 Upgrade banner + checkout guard** — banner hidden when `plan==='pro'`; checkout rejects already-pro. Test: layout gate; checkout 409 when pro.
 - [x] **2.6 Account page reflects real plan + self-serve cancel** — Stripe Customer Portal route; annual reachable from upgrade. Test: portal route requires auth + customer id.
 
-## Wave 3 — Billing robustness
+## Wave 3 — Billing robustness ✅ DONE
 
-- [ ] **3.1 Webhook event coverage** — handle `customer.subscription.updated`, `invoice.payment_failed`; downgrade/past_due. Test: payment_failed flips plan/grace.
-- [ ] **3.2 Webhook idempotency** — `stripe_events(event_id)` dedup table. Test: replayed event is a no-op.
-- [ ] **3.3 Customer-id fallback** — resolve user by `stripe_customer_id` when metadata absent. Test: sub without metadata still maps.
+- [x] **3.1 Webhook event coverage** — handle `customer.subscription.updated`, `invoice.payment_failed`; downgrade/past_due. Test: payment_failed flips plan/grace.
+- [x] **3.2 Webhook idempotency** — `stripe_events(event_id)` dedup table. Test: replayed event is a no-op.
+- [x] **3.3 Customer-id fallback** — resolve user by `stripe_customer_id` when metadata absent. Test: sub without metadata still maps.
 
 ## Wave 4 — Activation UX
 

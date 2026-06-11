@@ -298,6 +298,14 @@ async function initSchema() {
     ALTER TABLE users ADD COLUMN IF NOT EXISTS plan TEXT NOT NULL DEFAULT 'free';
     ALTER TABLE users ADD COLUMN IF NOT EXISTS stripe_customer_id TEXT;
   `);
+  // Webhook idempotency: every processed Stripe event id is recorded so a
+  // replayed/duplicated event is a no-op.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS stripe_events (
+      event_id TEXT PRIMARY KEY,
+      received_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
   // Password reset tokens (only the SHA-256 hash is stored)
   await pool.query(`
     CREATE TABLE IF NOT EXISTS password_reset_tokens (
