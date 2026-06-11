@@ -6,12 +6,12 @@ Usage:
 
 import os
 import sys
-import time
 import shutil
 import base64
 import logging
 import tempfile
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -26,6 +26,13 @@ log = logging.getLogger("peakr-analyze")
 
 # Max videos to analyze per account (auto-analysis only)
 MAX_PER_ACCOUNT = 20
+
+# How many posts to analyze in parallel. Each analyze_post borrows its own
+# pooled DB connection (db.py ThreadedConnectionPool), so concurrent calls are
+# safe. Default 3 is a conservative step up from serial; tune on the Mac Mini
+# (and keep it <= DB_POOL_MAX). Concurrency helps most with WHISPER_MODE=api —
+# local CPU Whisper is CPU-bound, so parallel transcription contends on cores.
+ANALYSIS_CONCURRENCY = int(os.environ.get("ANALYSIS_CONCURRENCY", "3"))
 
 
 def analyze_post(post: dict) -> bool:
@@ -117,6 +124,31 @@ def analyze_post(post: dict) -> bool:
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
+def _analyze_concurrently(posts: list, max_workers: int, worker=analyze_post) -> int:
+    """Analyze ``posts`` with bounded concurrency. Returns the success count.
+
+    Maps ``worker`` (default: ``analyze_post``) over ``posts`` using a
+    ThreadPoolExecutor capped at ``max_workers`` — never unbounded. An exception
+    in any single post is logged and counted as a failure; it never aborts the
+    rest of the batch.
+    """
+    if not posts:
+        return 0
+
+    analyzed = 0
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(worker, post): post for post in posts}
+        for future in as_completed(futures):
+            post = futures[future]
+            try:
+                if future.result():
+                    analyzed += 1
+            except Exception as e:
+                pid = post.get("id") if isinstance(post, dict) else post
+                log.error(f"Unhandled error analyzing post {pid}: {e}")
+    return analyzed
+
+
 def run_analysis_pass(max_count: int = 10, threshold: float = 1.5) -> int:
     """Run one analysis pass. Returns number of posts analyzed."""
     posts = get_unanalyzed_viral_posts(threshold=threshold, limit=max_count * 2)
@@ -146,15 +178,8 @@ def run_analysis_pass(max_count: int = 10, threshold: float = 1.5) -> int:
 
     filtered = filtered[:max_count]
 
-    analyzed = 0
-    for i, post in enumerate(filtered):
-        log.info(f"--- Analyzing {i+1}/{len(filtered)}: post {post['id']} by @{post.get('username', '?')} (viral: {post.get('viral_score', 0):.1f}x) ---")
-        if analyze_post(post):
-            analyzed += 1
-
-        # Rate limit between posts
-        if i < len(filtered) - 1:
-            time.sleep(5)
+    log.info(f"Analyzing {len(filtered)} posts with concurrency {ANALYSIS_CONCURRENCY}")
+    analyzed = _analyze_concurrently(filtered, max_workers=ANALYSIS_CONCURRENCY)
 
     log.info(f"Analysis pass complete: {analyzed}/{len(filtered)} posts analyzed")
     return analyzed
