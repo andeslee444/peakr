@@ -64,6 +64,14 @@ export default function HookLabPage() {
   const [comparePosts, setComparePosts] = useState<Post[]>([]);
   const [showComparePanel, setShowComparePanel] = useState(false);
 
+  // Esc closes the comparison modal (keyboard accessibility).
+  useEffect(() => {
+    if (!showComparePanel) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setShowComparePanel(false); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [showComparePanel]);
+
   const toggleCompare = (post: Post) => {
     setComparePosts(prev => {
       const exists = prev.find(p => p.id === post.id);
@@ -426,7 +434,7 @@ export default function HookLabPage() {
             {comparePosts.map(p => (
               <div key={p.id} className="flex items-center gap-1 bg-indigo-50 rounded-lg px-2 py-1">
                 <span className="text-xs font-medium text-indigo-700 truncate max-w-[100px]">@{p.username}</span>
-                <button onClick={() => toggleCompare(p)} className="text-indigo-400 hover:text-indigo-600">
+                <button onClick={() => toggleCompare(p)} aria-label={`Remove @${p.username} from comparison`} className="text-indigo-400 hover:text-indigo-600">
                   <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                   </svg>
@@ -449,12 +457,22 @@ export default function HookLabPage() {
 
       {/* Comparison panel */}
       {showComparePanel && comparePosts.length >= 2 && (
-        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-5xl max-h-[90vh] overflow-y-auto">
+        <div
+          className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Hook comparison"
+          onClick={() => setShowComparePanel(false)}
+        >
+          <div
+            className="bg-white rounded-2xl shadow-2xl w-full max-w-5xl max-h-[90vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 sticky top-0 bg-white z-10 rounded-t-2xl">
               <h2 className="text-lg font-bold text-gray-900">Hook Comparison</h2>
               <button
                 onClick={() => setShowComparePanel(false)}
+                aria-label="Close comparison"
                 className="p-2 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100"
               >
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">

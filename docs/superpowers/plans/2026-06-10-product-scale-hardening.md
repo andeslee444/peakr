@@ -71,7 +71,7 @@
 - [x] **8.1 Scrape-debt metric + Sentry paging** (get_scrape_debt + daemon alert). Prereqs done: SKIP LOCKED [5.1] + connection pool [6.6]. **Remaining (ops, needs Mini runtime):** spawn 3-5 worker processes claiming via the now-concurrency-safe queue + route the 4h refresh through it.
 - [x] **8.2 `WHISPER_MODE=api` path**.
 - [ ] **8.3 Landing page reposition (copy + real screenshots)**.
-- [ ] **8.4 a11y pass (labels, focus trap, keyboard)**.
+- [x] **8.4 a11y pass (labels, focus trap, keyboard)**.
 - [ ] **8.5 Land-in-Hook-Lab onboarding**.
 - [x] **8.6 Hook Lab empty-state CTA / clear-niche**.
 - [ ] **8.7 Value loop: track own handle + weekly digest**.
