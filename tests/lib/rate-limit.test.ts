@@ -1,8 +1,16 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { rateLimit, resetRateLimitStore, clientKey } from '@/lib/rate-limit';
+import { rateLimit, resetRateLimitStore, clientKey, rateLimitStoreSize } from '@/lib/rate-limit';
 
 describe('rateLimit', () => {
   beforeEach(() => resetRateLimitStore());
+
+  it('prunes expired buckets so the store does not grow unbounded', () => {
+    for (let i = 0; i < 500; i++) rateLimit(`ip-${i}`, 1, 1000, 0);
+    expect(rateLimitStoreSize()).toBe(500);
+    // A request well after those windows expired triggers a sweep.
+    rateLimit('fresh', 1, 1000, 10_000);
+    expect(rateLimitStoreSize()).toBeLessThan(500);
+  });
 
   it('allows requests up to the limit, then blocks', () => {
     const now = 1000;

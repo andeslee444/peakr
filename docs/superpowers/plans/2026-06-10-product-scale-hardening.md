@@ -57,10 +57,10 @@
 - [x] **6.5 Dashboard polling** — Page Visibility gating + Cache-Control on worker-status/notifications.
 - [x] **6.6 Daemon connection pool**.
 
-## Wave 7 — Security / session / hygiene
+## Wave 7 — Security / session / hygiene ✅ DONE
 
 - [x] **7.1 Invalidate JWTs on password change** — `password_changed_at`/`token_version`.
-- [ ] **7.2 Shared rate limiter** — Upstash/Vercel KV behind `rateLimit()` (or document the limitation + gate).
+- [x] **7.2 Shared rate limiter** — Upstash/Vercel KV behind `rateLimit()` (or document the limitation + gate).
 - [x] **7.3 Remove dead `saved_hooks`/`user_hooks`; fix `saved/import` stat recompute**.
 - [x] **7.4 Schema source of truth + CI drift check**.
 - [x] **7.5 Onboarding gate on JWT value**.
