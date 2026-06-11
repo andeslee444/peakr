@@ -25,7 +25,8 @@ function postReq(body: unknown) {
   });
 }
 
-const trackedPost = { id: 7, post_url: 'https://www.tiktok.com/@u/video/1', analyzed_at: null };
+const trackedPost = { id: 7, post_url: 'https://www.tiktok.com/@u/video/1', analyzed_at: null, hook_analysis: null };
+const pendingPost = { id: 7, post_url: 'https://www.tiktok.com/@u/video/1', analyzed_at: null, hook_analysis: { status: 'pending' } };
 
 describe('POST /api/analyze-hook', () => {
   beforeEach(() => {
@@ -60,6 +61,24 @@ describe('POST /api/analyze-hook', () => {
     });
     const res = await POST(postReq({ post_id: 7 }));
     expect(res.status).toBe(429);
+  });
+
+  it('does not re-charge the daily cap when the post is already queued (pending)', async () => {
+    mockAuth.mockResolvedValue({ user: { id: '1' } } as never);
+    const query = poolWith((sql) => {
+      if (sql.includes('user_tracked_profiles')) return { rows: [pendingPost] };
+      if (sql.includes('analysis_requests') && sql.toUpperCase().includes('COUNT')) {
+        return { rows: [{ count: 0 }] };
+      }
+      return { rows: [] };
+    });
+    const res = await POST(postReq({ post_id: 7 }));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ status: 'queued', post_id: 7 });
+    // The bug: reopening a pending post inserted a SECOND analysis_requests row,
+    // burning another unit of the daily quota. It must be a no-op now.
+    const sqls = query.mock.calls.map((c) => String(c[0]));
+    expect(sqls.some((s) => s.includes('INSERT INTO analysis_requests'))).toBe(false);
   });
 
   it('queues the post when authorized and under the cap', async () => {

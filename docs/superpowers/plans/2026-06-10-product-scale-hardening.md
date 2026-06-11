@@ -8,13 +8,13 @@
 
 ---
 
-## Wave 1 — Correctness bugs (pure bugs, small diffs, ship-first)
+## Wave 1 — Correctness bugs (pure bugs, small diffs, ship-first) ✅ DONE
 
-- [ ] **1.1 `saved_posts` join leaks/duplicates** — add `AND sp.user_id = $userId` to LEFT JOINs in `explore/route.ts:27` and `hook-lab/route.ts:104`; fixes row fan-out (post saved by N users → N rows), COUNT/rows desync, and cross-user `is_saved` leak. Test: query builder includes user predicate; no dup rows for multi-user saves.
-- [ ] **1.2 `forgot-password` claims success when email no-ops** — branch on `sendEmail()` `{sent:false}`; return an honest "email not configured / temporarily unavailable" signal; UI stops asserting "we sent a link" when it didn't. Test: route returns `emailSent:false` when RESEND unset; still no user-enumeration.
-- [ ] **1.3 Nav "Go Viral" CTA routes to sign-in** — `Navigation.tsx:51,99` → `/signup`. Test: component renders the CTA href as `/signup`.
-- [ ] **1.4 `keyframe` open-redirect** — validate `thumbnail_url` against `INSTAGRAM_IMAGE_HOSTS` (reuse ssrf allowlist) before 302, else 404/route via image-proxy. Test: disallowed host → not redirected.
-- [ ] **1.5 analyze-hook reopen double-burns daily quota** — the `already_analyzed` short-circuit is gated on `analyzed_at` (still null while pending), so re-requesting a queued post re-charges the cap. Gate on pending/queued state too. Test: second request for a queued post does not increment usage.
+- [x] **1.1 `saved_posts` join leaks/duplicates** — add `AND sp.user_id = $userId` to LEFT JOINs in `explore/route.ts:27` and `hook-lab/route.ts:104`; fixes row fan-out (post saved by N users → N rows), COUNT/rows desync, and cross-user `is_saved` leak. Test: query builder includes user predicate; no dup rows for multi-user saves.
+- [x] **1.2 `forgot-password` claims success when email no-ops** — branch on `sendEmail()` `{sent:false}`; return an honest "email not configured / temporarily unavailable" signal; UI stops asserting "we sent a link" when it didn't. Test: route returns `emailSent:false` when RESEND unset; still no user-enumeration.
+- [x] **1.3 Nav "Go Viral" CTA routes to sign-in** — `Navigation.tsx:51,99` → `/signup`. Test: component renders the CTA href as `/signup`.
+- [x] **1.4 `keyframe` open-redirect** — validate `thumbnail_url` against `INSTAGRAM_IMAGE_HOSTS` (reuse ssrf allowlist) before 302, else 404/route via image-proxy. Test: disallowed host → not redirected.
+- [x] **1.5 analyze-hook reopen double-burns daily quota** — the `already_analyzed` short-circuit is gated on `analyzed_at` (still null while pending), so re-requesting a queued post re-charges the cap. Gate on pending/queued state too. Test: second request for a queued post does not increment usage.
 
 ## Wave 2 — Monetization (highest leverage)
 

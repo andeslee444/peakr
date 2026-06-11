@@ -18,7 +18,7 @@ export async function POST(request: Request) {
     // Ownership: the post must belong to a profile this user actually tracks.
     // (Also avoids leaking the existence of posts the user can't see.)
     const { rows: [post] } = await pool.query(
-      `SELECT p.id, p.post_url, p.analyzed_at
+      `SELECT p.id, p.post_url, p.analyzed_at, p.hook_analysis
        FROM posts p
        JOIN user_tracked_profiles utp ON utp.profile_id = p.profile_id
        WHERE p.id = $1 AND utp.user_id = $2`,
@@ -38,6 +38,14 @@ export async function POST(request: Request) {
         [post_id]
       );
       return NextResponse.json({ status: 'already_analyzed', ...existing });
+    }
+
+    // Already queued: a prior request flagged this post pending but the daemon
+    // hasn't finished yet (so analyzed_at is still null). Re-requesting must be a
+    // no-op — otherwise reopening the post inserts another analysis_requests row
+    // and silently burns a second unit of the user's daily cap.
+    if (post.hook_analysis && typeof post.hook_analysis === 'object' && post.hook_analysis.status === 'pending') {
+      return NextResponse.json({ status: 'queued', post_id, alreadyQueued: true });
     }
 
     // Per-user daily cap on the (paid) manual analysis pipeline.
