@@ -347,13 +347,14 @@ async function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_notifications_created_at ON notifications(created_at DESC);
   `);
   // saved_posts is now per-user: add user_id, drop the old global (post_id)
-  // uniqueness, and key uniqueness on (user_id, post_id).
-  await run(`
-    ALTER TABLE saved_posts ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id) ON DELETE CASCADE;
-    DROP INDEX IF EXISTS saved_posts_post_id_key;
-    ALTER TABLE saved_posts DROP CONSTRAINT IF EXISTS saved_posts_post_id_key;
-    CREATE UNIQUE INDEX IF NOT EXISTS saved_posts_user_post_key ON saved_posts(user_id, post_id);
-  `);
+  // uniqueness, and key uniqueness on (user_id, post_id). Run each statement
+  // independently so the critical ADD COLUMN can't be rolled back by a later one,
+  // and drop the CONSTRAINT before the index — saved_posts_post_id_key is a
+  // constraint-backed index, so DROP INDEX first errors ("constraint requires it").
+  await run(`ALTER TABLE saved_posts ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id) ON DELETE CASCADE`);
+  await run(`ALTER TABLE saved_posts DROP CONSTRAINT IF EXISTS saved_posts_post_id_key`);
+  await run(`DROP INDEX IF EXISTS saved_posts_post_id_key`);
+  await run(`CREATE UNIQUE INDEX IF NOT EXISTS saved_posts_user_post_key ON saved_posts(user_id, post_id)`);
   // Unique constraint for playbook upsert by user + hook_type + niche
   await run(`
     CREATE UNIQUE INDEX IF NOT EXISTS playbook_sections_user_type_niche_key
