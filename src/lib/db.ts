@@ -26,7 +26,17 @@ let _schemaInitialized = false;
 async function initSchema() {
   if (_schemaInitialized) return;
   const pool = getPool();
-  await pool.query(`
+  // Run each migration block INDEPENDENTLY so one failing block can't silently
+  // skip every later block. A partial init previously left saved_posts without
+  // user_id, which 500'd hook-lab/explore (their queries reference sp.user_id).
+  const run = async (sql: string) => {
+    try {
+      await pool.query(sql);
+    } catch (e) {
+      console.error('[db init] migration block failed (continuing):', (e as Error).message);
+    }
+  };
+  await run(`
     CREATE TABLE IF NOT EXISTS users (
       id SERIAL PRIMARY KEY,
       tiktok_id TEXT UNIQUE,
@@ -115,7 +125,7 @@ async function initSchema() {
     );
   `);
   // Migrate hook columns for existing databases
-  await pool.query(`
+  await run(`
     ALTER TABLE posts ADD COLUMN IF NOT EXISTS transcript TEXT;
     ALTER TABLE posts ADD COLUMN IF NOT EXISTS hook_analysis JSONB;
     ALTER TABLE posts ADD COLUMN IF NOT EXISTS analyzed_at TIMESTAMPTZ;
@@ -128,7 +138,7 @@ async function initSchema() {
     ALTER TABLE posts ADD COLUMN IF NOT EXISTS audio_author TEXT;
   `);
   // Video URL cache for hover-to-play
-  await pool.query(`
+  await run(`
     CREATE TABLE IF NOT EXISTS video_url_cache (
       id SERIAL PRIMARY KEY,
       post_url TEXT UNIQUE NOT NULL,
@@ -138,7 +148,7 @@ async function initSchema() {
     );
   `);
   // Seed creators for Hook Lab content pipeline
-  await pool.query(`
+  await run(`
     CREATE TABLE IF NOT EXISTS seed_creators (
       id SERIAL PRIMARY KEY,
       username TEXT NOT NULL,
@@ -162,7 +172,7 @@ async function initSchema() {
     );
   `);
   // Phase 3: Creator profiles, saved hooks, playbook
-  await pool.query(`
+  await run(`
     CREATE TABLE IF NOT EXISTS creator_profiles (
       id SERIAL PRIMARY KEY,
       user_id INTEGER REFERENCES users(id) UNIQUE,
@@ -210,7 +220,7 @@ async function initSchema() {
       UNIQUE(user_id, profile_id)
     );
   `);
-  await pool.query(`
+  await run(`
     CREATE INDEX IF NOT EXISTS idx_utp_user_id ON user_tracked_profiles(user_id);
     CREATE INDEX IF NOT EXISTS idx_utp_profile_id ON user_tracked_profiles(profile_id);
   `);
@@ -218,7 +228,7 @@ async function initSchema() {
   // live "My Hooks" feature uses hook_patterns + user_saved_patterns below. Any
   // pre-existing empty tables in older databases are harmless and left in place.
   // Global hook patterns (system-wide grouping + analytics)
-  await pool.query(`
+  await run(`
     CREATE TABLE IF NOT EXISTS hook_patterns (
       id SERIAL PRIMARY KEY,
       canonical_template TEXT UNIQUE NOT NULL,
@@ -249,14 +259,14 @@ async function initSchema() {
       UNIQUE(user_id, pattern_id)
     );
   `);
-  await pool.query(`
+  await run(`
     CREATE INDEX IF NOT EXISTS idx_hpp_pattern_id ON hook_pattern_posts(pattern_id);
     CREATE INDEX IF NOT EXISTS idx_hpp_post_id ON hook_pattern_posts(post_id);
     CREATE INDEX IF NOT EXISTS idx_usp_user_id ON user_saved_patterns(user_id);
     CREATE INDEX IF NOT EXISTS idx_usp_pattern_id ON user_saved_patterns(pattern_id);
   `);
   // Hook collections
-  await pool.query(`
+  await run(`
     CREATE TABLE IF NOT EXISTS hook_collections (
       id SERIAL PRIMARY KEY,
       user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -273,14 +283,14 @@ async function initSchema() {
     );
   `);
   // Billing: subscription plan + Stripe customer linkage on users
-  await pool.query(`
+  await run(`
     ALTER TABLE users ADD COLUMN IF NOT EXISTS plan TEXT NOT NULL DEFAULT 'free';
     ALTER TABLE users ADD COLUMN IF NOT EXISTS stripe_customer_id TEXT;
     -- Bumped on password change to revoke existing JWTs.
     ALTER TABLE users ADD COLUMN IF NOT EXISTS token_version INTEGER NOT NULL DEFAULT 0;
   `);
   // AI-generated hooks, persisted so they survive refresh/navigation.
-  await pool.query(`
+  await run(`
     CREATE TABLE IF NOT EXISTS generated_hooks (
       id SERIAL PRIMARY KEY,
       user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -292,14 +302,14 @@ async function initSchema() {
   `);
   // Webhook idempotency: every processed Stripe event id is recorded so a
   // replayed/duplicated event is a no-op.
-  await pool.query(`
+  await run(`
     CREATE TABLE IF NOT EXISTS stripe_events (
       event_id TEXT PRIMARY KEY,
       received_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
   `);
   // Password reset tokens (only the SHA-256 hash is stored)
-  await pool.query(`
+  await run(`
     CREATE TABLE IF NOT EXISTS password_reset_tokens (
       id SERIAL PRIMARY KEY,
       user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -311,7 +321,7 @@ async function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_prt_token_hash ON password_reset_tokens(token_hash);
   `);
   // Per-user manual analysis request log (daily-cap enforcement)
-  await pool.query(`
+  await run(`
     CREATE TABLE IF NOT EXISTS analysis_requests (
       id SERIAL PRIMARY KEY,
       user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -322,7 +332,7 @@ async function initSchema() {
       ON analysis_requests(user_id, created_at DESC);
   `);
   // Notifications
-  await pool.query(`
+  await run(`
     CREATE TABLE IF NOT EXISTS notifications (
       id SERIAL PRIMARY KEY,
       user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -338,14 +348,14 @@ async function initSchema() {
   `);
   // saved_posts is now per-user: add user_id, drop the old global (post_id)
   // uniqueness, and key uniqueness on (user_id, post_id).
-  await pool.query(`
+  await run(`
     ALTER TABLE saved_posts ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id) ON DELETE CASCADE;
     DROP INDEX IF EXISTS saved_posts_post_id_key;
     ALTER TABLE saved_posts DROP CONSTRAINT IF EXISTS saved_posts_post_id_key;
     CREATE UNIQUE INDEX IF NOT EXISTS saved_posts_user_post_key ON saved_posts(user_id, post_id);
   `);
   // Unique constraint for playbook upsert by user + hook_type + niche
-  await pool.query(`
+  await run(`
     CREATE UNIQUE INDEX IF NOT EXISTS playbook_sections_user_type_niche_key
     ON playbook_sections(user_id, COALESCE(hook_type, ''), COALESCE(niche, ''));
   `);
@@ -354,7 +364,7 @@ async function initSchema() {
   // which aborted a fresh-DB bootstrap; it now lives in the CREATE plus this
   // safe backfill. Engagement counters widen to BIGINT (mega-creators exceed
   // 32-bit range).
-  await pool.query(`
+  await run(`
     ALTER TABLE creator_profiles ADD COLUMN IF NOT EXISTS content_topics TEXT;
     ALTER TABLE posts   ALTER COLUMN views    TYPE BIGINT;
     ALTER TABLE posts   ALTER COLUMN likes    TYPE BIGINT;
@@ -365,7 +375,7 @@ async function initSchema() {
     ALTER TABLE profiles ALTER COLUMN total_likes TYPE BIGINT;
   `);
   // Indexes for hot list/sort paths (explore, export, hook-lab, profile views).
-  await pool.query(`
+  await run(`
     CREATE INDEX IF NOT EXISTS idx_posts_profile_id ON posts(profile_id);
     CREATE INDEX IF NOT EXISTS idx_posts_viral_score ON posts(viral_score DESC);
     CREATE INDEX IF NOT EXISTS idx_posts_posted_at ON posts(posted_at DESC);
